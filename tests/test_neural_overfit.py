@@ -1,8 +1,8 @@
 """
 test_neural_overfit.py — Verify BiGRU can overfit a single batch
 
-Sanity check: if the model cannot memorize one small batch,
-something is wrong with the architecture or training loop.
+Sanity check: if the model cannot memorize a small batch, the architecture
+or training loop has a bug.
 """
 
 import pytest
@@ -17,9 +17,9 @@ from neural_decoder import (
 from trellis import load_nasa_k7
 
 
-T_STEPS = 262
-INPUT_DIM = 2
-BATCH_SIZE = 4  # Must be small enough for model to memorize (params > batch*K_INFO)
+N_SYM = 524
+INPUT_DIM = 1
+BATCH_SIZE = 4  # Small so model (6.6K params) can memorize (4*256=1024 outputs)
 N_STEPS = 500
 LR = 5e-3
 
@@ -36,7 +36,7 @@ def pool(trellis):
 
 @pytest.fixture(scope="module")
 def fixed_batch(pool):
-    """Generate one fixed batch at high SNR, low interference."""
+    """One fixed batch at high SNR, low interference."""
     device = torch.device("cpu")
     rng = np.random.default_rng(42)
     rx, bits = generate_training_batch(
@@ -50,12 +50,11 @@ def fixed_batch(pool):
 
 
 def test_overfit_single_batch(fixed_batch):
-    """Train on one batch for 200 steps; loss must drop and accuracy must be high."""
+    """Train on one batch; loss must drop and accuracy must be high."""
     rx, bits = fixed_batch
-    device = rx.device
 
-    model = BiRNNDecoder(hidden_size=24, input_dim=INPUT_DIM, cell_type="GRU",
-                         bidirectional=True).to(device)
+    model = BiRNNDecoder(hidden_size=32, input_dim=INPUT_DIM, cell_type="GRU",
+                         bidirectional=True)
     optimizer = Adam(model.parameters(), lr=LR)
     criterion = nn.BCEWithLogitsLoss()
 
@@ -66,7 +65,6 @@ def test_overfit_single_batch(fixed_batch):
     for step in range(N_STEPS):
         logits = model(rx)
         loss = criterion(logits, bits)
-
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -78,13 +76,11 @@ def test_overfit_single_batch(fixed_batch):
 
     print(f"Overfit test: initial_loss={initial_loss:.4f}, final_loss={final_loss:.4f}")
 
-    # Loss must have decreased significantly
     assert final_loss < 0.4, \
         f"Final loss {final_loss:.4f} > 0.4 — model failed to overfit"
     assert final_loss < initial_loss * 0.5, \
         f"Loss didn't drop enough: {initial_loss:.4f} -> {final_loss:.4f}"
 
-    # Check bit accuracy
     model.eval()
     with torch.no_grad():
         logits = model(rx)
@@ -93,16 +89,15 @@ def test_overfit_single_batch(fixed_batch):
 
     print(f"Overfit test: bit accuracy = {accuracy:.4f}")
     assert accuracy > 0.85, \
-        f"Bit accuracy {accuracy:.4f} < 0.85 — model failed to memorize batch"
+        f"Bit accuracy {accuracy:.4f} < 0.85"
 
 
-def test_loss_decreases_monotonically(fixed_batch):
-    """Loss should generally decrease (allow small fluctuations)."""
+def test_loss_decreases(fixed_batch):
+    """Loss should decrease over training."""
     rx, bits = fixed_batch
-    device = rx.device
 
-    model = BiRNNDecoder(hidden_size=24, input_dim=INPUT_DIM, cell_type="GRU",
-                         bidirectional=True).to(device)
+    model = BiRNNDecoder(hidden_size=32, input_dim=INPUT_DIM, cell_type="GRU",
+                         bidirectional=True)
     optimizer = Adam(model.parameters(), lr=LR)
     criterion = nn.BCEWithLogitsLoss()
 
@@ -116,9 +111,8 @@ def test_loss_decreases_monotonically(fixed_batch):
         optimizer.step()
         losses.append(loss.item())
 
-    # Compare first 20 average to last 20 average
     first_avg = np.mean(losses[:20])
     last_avg = np.mean(losses[-20:])
 
     assert last_avg < first_avg * 0.8, \
-        f"Loss didn't decrease enough: first_20_avg={first_avg:.4f}, last_20_avg={last_avg:.4f}"
+        f"Loss didn't decrease: first_20={first_avg:.4f}, last_20={last_avg:.4f}"
