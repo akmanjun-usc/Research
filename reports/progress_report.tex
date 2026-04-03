@@ -1,0 +1,433 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ────────────────────────────────────────────────────────────────
+\usepackage[margin=1.25in]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage[table]{xcolor}
+\usepackage{subfig}
+\usepackage{caption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{mdframed}
+
+% ── Page style ──────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Report}
+\lhead{Abhishek Manjunath}
+\cfoot{\thepage}
+
+% ── Theorem environments ────────────────────────────────────────────────────
+\newtheorem{definition}{Definition}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{remark}{Remark}[section]
+
+% ── Convenience macros ──────────────────────────────────────────────────────
+\newcommand{\bler}{\text{BLER}}
+\newcommand{\snr}{\text{SNR}}
+\newcommand{\inr}{\text{INR}}
+\newcommand{\dfree}{d_{\text{free}}}
+
+% ════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\LARGE\bfseries Search-Designed Trellis Codes\\[0.4em] with Neural Decoding\par}
+\vspace{1.5cm}
+\rule{0.6\textwidth}{0.4pt}\\[0.8cm]
+{\large Abhishek Manjunath\\[0.2em]
+University of Southern California\par}
+\vfill
+{\normalsize
+\textbf{Current Phase:} Phase 1 --- Strong Baselines\\[0.3em]
+\textbf{Phase Status:} Complete\\[0.3em]
+\textbf{Codebase state as of:} March 11, 2026}
+\end{titlepage}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Introduction and Motivation}
+
+Modern communication systems deployed in industrial IoT environments encounter structured interference that standard AWGN channel models do not capture. Periodic sinusoidal interference from switching power supplies, variable-frequency motor drives, and other electromagnetic sources imposes a deterministic-yet-unknown additive component on the received signal. Classical minimum-distance decoders, designed for white Gaussian noise, are mismatched to this channel and suffer avoidable performance degradation.
+
+This project investigates the \emph{joint co-design} of a convolutional trellis code and a learned neural decoder, both optimized for the sinusoidal interference regime. The central thesis is:
+
+\begin{quote}
+\itshape
+``When channels are mismatched, structured, or computationally constrained,
+the best end-to-end system may be obtained by co-designing the trellis and
+a constrained learned decoder for the realistic impairment family.''
+\end{quote}
+
+The primary objective is not to surpass state-of-the-art codes on clean AWGN. The goals are:
+\begin{enumerate}
+  \item \textbf{Robustness:} Maintain reliable decoding across a wide range of interference-to-noise ratios.
+  \item \textbf{Graceful degradation:} Performance degrades smoothly as interference parameters move outside the training distribution.
+  \item \textbf{Compute efficiency:} All methods operate within $2.1 \times 10^6$ operations per block, enabling fair comparison.
+\end{enumerate}
+
+The system is evaluated using block error rate (BLER) at a target of $\bler = 10^{-3}$, across SNR $\in [0,10]$\,dB and INR $\in [-5, 15]$\,dB.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{System Model}
+
+\subsection{Code Parameters}
+
+The system uses BPSK modulation with constellation $x[t] \in \{-1,+1\}$. Each block encodes $K = 256$ information bits at rate $R = 1/2$, producing $N = 512$ coded symbols. Table~\ref{tab:params} lists all fixed system parameters.
+
+\begin{table}[h]
+\centering
+\caption{Fixed System Parameters}
+\label{tab:params}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Modulation              & BPSK, $x[t] \in \{-1,+1\}$ \\
+Information bits        & $K = 256$ \\
+Coded symbols           & $N = 512$ \\
+Code rate               & $R = 1/2$ \\
+Trellis states          & $S = 64$ \\
+Trellis structure       & Time-invariant, block-terminated \\
+Computational budget    & $2.1 \times 10^6$ operations per block \\
+SNR range               & $0$--$10$\,dB (focus: $5$\,dB) \\
+INR range               & $-5$--$15$\,dB \\
+BLER target             & $10^{-3}$ \\
+MC trials (evaluation)  & $10^5$ \\
+MC trials (search full) & $10^4$ \\
+MC trials (search proxy)& $10^3$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Trellis Encoder}
+
+\begin{definition}[Trellis Finite-State Machine]
+A trellis encoder is the tuple $\mathcal{T} = (\mathcal{S},\,\mathcal{I},\,\mathcal{O},\,\delta,\,\lambda)$, where
+$\mathcal{S} = \{0,\ldots,S-1\}$ is the state space,
+$\mathcal{I} = \{0,1\}$ is the binary input alphabet,
+$\mathcal{O} = \{-1,+1\}^2$ is the output symbol pair,
+$\delta : \mathcal{S} \times \mathcal{I} \to \mathcal{S}$ is the next-state function, and
+$\lambda : \mathcal{S} \times \mathcal{I} \to \mathcal{O}$ is the output labelling.
+\end{definition}
+
+Starting at initial state $s_0 = 0$, for each information bit $u_t \in \{0,1\}$:
+\begin{align}
+  s_{t+1} &= \delta(s_t,\, u_t), \\
+  \mathbf{c}_t &= \lambda(s_t,\, u_t) \in \{-1,+1\}^2.
+\end{align}
+The block is \emph{terminated} by appending tail bits that return the encoder to state $0$, establishing $s_N = 0$ and enabling decoding with known boundary conditions. For the $K=7$ code, termination requires $K-1 = 6$ tail bits, producing $2 \times (K_{\text{info}} + 6) = 524$ coded bits total.
+
+\subsection{Structural Constraints on Valid Trellis Candidates}
+
+All candidate trellises in Phase~3 must satisfy:
+\begin{enumerate}
+  \item \textbf{Non-catastrophic:} No cycle in the trellis produces zero output weight.
+  \item \textbf{Full connectivity:} Every state is reachable from $s_0 = 0$, and $s_0$ is reachable from every state.
+  \item \textbf{Minimum free distance:} $\dfree \geq 8$, providing correction of up to $\lfloor(8-1)/2\rfloor = 3$ bit errors.
+\end{enumerate}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Channel Model and Mathematical Formulation}
+
+\subsection{Received Signal}
+
+At discrete time $t \in \{0,\ldots,N-1\}$:
+\begin{equation}
+  r[t] = x[t] + n[t] + i[t],
+  \label{eq:channel}
+\end{equation}
+where $n[t] \sim \mathcal{N}(0, \sigma^2)$ is i.i.d.\ AWGN and $i[t]$ is the sinusoidal interference.
+
+\subsection{SNR and Noise Variance}
+
+With unit symbol energy $E_s = 1$:
+\begin{equation}
+  \snr_{\text{lin}} = 10^{\snr_{\text{dB}}/10},
+  \qquad
+  \sigma^2 = \frac{1}{\snr_{\text{lin}}}.
+\end{equation}
+
+\subsection{Sinusoidal Interference}
+
+\begin{equation}
+  i[t] = A \cdot \sin\!\left(\frac{2\pi t}{P} + \varphi\right),
+  \label{eq:interference}
+\end{equation}
+with parameters drawn independently per block:
+\begin{align}
+  P      &\sim \mathcal{U}_{\mathbb{Z}}\{8, \ldots, 32\}, \\
+  \varphi &\sim \mathcal{U}[0, 2\pi).
+\end{align}
+Since $P \geq 8$ and $N = 512$, at least $\lfloor 512/8 \rfloor = 64$ complete cycles occur per block.
+
+\subsection{Amplitude--INR Relationship}
+
+A sinusoid $A\sin(\cdot)$ has average power $A^2/2$. The INR is therefore:
+\begin{equation}
+  \inr_{\text{lin}} = \frac{A^2/2}{\sigma^2}
+  \implies
+  A = \sqrt{2\,\inr_{\text{lin}}\,\sigma^2} = \sqrt{\frac{2\,\inr_{\text{lin}}}{\snr_{\text{lin}}}},
+  \label{eq:amplitude}
+\end{equation}
+where $\inr_{\text{lin}} = 10^{\inr_{\text{dB}}/10}$.
+
+\begin{remark}
+At $\inr = \snr = 5$\,dB (both linear $\approx 3.16$), the amplitude $A = \sqrt{2} \approx 1.41$ exceeds the BPSK symbol magnitude of $1$. Interference therefore dominates the signal at this operating point, making the mismatched AWGN assumption highly inaccurate.
+\end{remark}
+
+\subsection{Training Distribution for Neural Methods}
+
+All channel parameters are re-randomised per batch block:
+\begin{equation}
+  \snr_{\text{dB}} \sim \mathcal{U}[0, 10],\quad
+  \inr_{\text{dB}} \sim \mathcal{U}[-5, 10],\quad
+  P \sim \mathcal{U}_{\mathbb{Z}}\{8,\ldots,32\},\quad
+  \varphi \sim \mathcal{U}[0, 2\pi).
+\end{equation}
+Evaluation uses both in-distribution and shifted test sets (e.g.\ $\inr > 10$\,dB, $P \notin [8,32]$) to assess generalisation.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Baseline Methods}
+
+\subsection{B1: Mismatched Viterbi Decoder}
+
+The primary baseline uses the NASA $K=7$ rate-$1/2$ convolutional code with generator polynomials $\mathbf{g}_1 = [1,1,1,1,0,0,1]$ and $\mathbf{g}_2 = [1,0,1,1,0,1,1]$ (octal: 171, 133), achieving $\dfree = 10$.
+
+The Viterbi decoder applies squared Euclidean branch metrics under the assumption of pure AWGN, ignoring interference:
+\begin{equation}
+  \gamma_t^{\text{mm}}(s \to s')
+  = -\frac{1}{2\sigma^2}\sum_{j=1}^{2}\!\left(r_t^{(j)} - c_t^{(j)}\right)^2.
+  \label{eq:mm_bm}
+\end{equation}
+The true metric under the actual channel~(Eq.~\ref{eq:channel}) differs by a bias term involving $i_t^{(j)}$, which is structured and time-varying. B1 ignores this bias entirely.
+
+The implementation uses a vectorized reverse-trellis formulation: for each destination state, all incoming branches are evaluated simultaneously via NumPy broadcasting. An optional C extension (\texttt{viterbi\_core.so}) provides additional speedup when compiled. The Viterbi algorithm performs add-compare-select operations at each of $T = N/2 = 256$ time steps across $S = 64$ states with $2$ incoming branches per state.
+
+\subsection{B2: Oracle Viterbi Decoder (Performance Ceiling)}
+
+The oracle decoder knows $A$, $P$, $\varphi$ exactly per block, subtracts $i[t]$, and applies the matched metric to the cleaned signal $\tilde{r}[t] = r[t] - i[t] = x[t] + n[t]$:
+\begin{equation}
+  \gamma_t^{\text{oracle}}(s \to s')
+  = -\frac{1}{2\sigma^2}\sum_{j=1}^{2}\!\left(\tilde{r}_t^{(j)} - c_t^{(j)}\right)^2.
+\end{equation}
+B2 represents the performance ceiling. The gap B1 $-$ B2 (in dB at fixed BLER) quantifies the loss attributable solely to interference ignorance.
+
+\subsection{B3: Random Trellis + Neural Decoder (Search Sanity Check)}
+
+B3 uses a randomly generated 64-state trellis (subject to structural constraints) with the same GRU decoder as N1. Its sole purpose is to verify that Phase~3 search finds genuinely good structure: the searched trellis (S1) must beat B3 by $\geq 1$\,dB at $\bler = 10^{-3}$. B3 is not yet evaluated; it is scheduled for Phase~3.
+
+\subsection{B5: Interference Estimation and Cancellation + Viterbi}
+
+B5 estimates $(A, P, \varphi)$ from the received signal via DSP, cancels the estimated interference, then applies mismatched Viterbi to the residual:
+
+\begin{enumerate}
+  \item \textbf{Frequency estimation.} Compute the FFT of the received signal and identify the dominant frequency within the valid period range $P \in [8, 32]$:
+  \begin{equation}
+    \hat{f} = \arg\max_{f'\,:\, 1/32 \leq f' \leq 1/8} \left|\sum_{t=0}^{N-1} r[t]\, e^{-j2\pi f' t}\right|^2.
+  \end{equation}
+  The top-$5$ frequency candidates are retained for refinement.
+
+  \item \textbf{Amplitude and phase estimation.} For each candidate frequency $\hat{f}$, form the least-squares problem with basis $[\cos(\omega t),\; \sin(\omega t),\; 1]$ where $\omega = 2\pi\hat{f}$:
+  \begin{equation}
+    \min_{a,b,c} \sum_{t=0}^{N-1}
+      \!\left(r[t] - a\cos(\omega t) - b\sin(\omega t) - c\right)^2.
+  \end{equation}
+  The amplitude and phase are recovered as $\hat{A} = \sqrt{a^2 + b^2}$ and $\hat{\varphi} = \arctan(a/b)$. The candidate with the lowest residual sum-of-squares is selected.
+
+  \item \textbf{Cancellation and decoding.}
+  $\tilde{r}[t] = r[t] - \hat{A}\sin(2\pi t/\hat{P} + \hat{\varphi})$, then B1 Viterbi on $\tilde{r}[t]$.
+\end{enumerate}
+
+B5 is critical for determining the regime where learning adds value: if simple DSP cancellation closes the gap between B1 and B2, the neural approach offers no benefit.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{GRU Neural Decoder (N1)}
+
+The GRU end-to-end decoder (N1) is scheduled for Phase~2a and has not yet been implemented.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Neural Branch Metric Estimator (N2)}
+
+The neural branch metric estimator (N2) is scheduled for Phase~2b and has not yet been implemented.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Interference Estimation Details}
+
+The interference estimation and cancellation module (\texttt{interference\_est.py}) is fully implemented and integrated into the B5 baseline as described in Section~4.4.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Trellis Search Algorithm}
+
+The evolutionary trellis search is scheduled for Phase~3 and has not yet been implemented.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Experimental Results}
+
+\subsection{Validation Tests}
+
+All ten validation tests pass as of March~11, 2026. Table~\ref{tab:tests} summarises the three categories of validation.
+
+\begin{table}[h]
+\centering
+\caption{Validation Test Results (pytest, 10 tests total)}
+\label{tab:tests}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Test} & \textbf{Description} & \textbf{Status} \\
+\midrule
+Noiseless round-trip (4 tests)      & Encode $\to$ Viterbi decode in zero noise: 0 bit errors across & PASS \\
+                                      & 100 random blocks, all-zero block, output length, binary check & \\
+AWGN theory match (3 tests)          & BLER at 8\,dB $< 0.05$; BLER decreases with SNR;              & PASS \\
+                                      & BLER at 0\,dB $> 0.5$                                          & \\
+Oracle dominance (3 tests)           & Oracle BER $\leq$ mismatched BER at INR $= 5$\,dB             & PASS \\
+                                      & and $10$\,dB; identical output with zero interference           & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{BLER vs.\ SNR Performance}
+
+The full Phase~1 Monte Carlo evaluation (\texttt{eval.py --n-trials 100000}) has not yet been executed. No \texttt{.npz} result files exist in \texttt{results/phase1/}. Accordingly, no BLER values are available to report.
+
+\begin{figure}[h]
+\centering
+\framebox[0.82\textwidth]{%
+  \parbox{0.80\textwidth}{\centering\vspace{2cm}
+  \textit{[Figure pending: run \texttt{eval.py} to generate BLER vs.\ SNR curves for B1, B2, B5.]}
+  \vspace{2cm}}}
+\caption{BLER vs.\ SNR at INR = 5\,dB. Monte Carlo trials: $10^5$. Pending execution of \texttt{eval.py}.}
+\label{fig:bler_snr}
+\end{figure}
+
+\subsection{BLER vs.\ INR --- Robustness Analysis}
+
+\begin{figure}[h]
+\centering
+\framebox[0.82\textwidth]{%
+  \parbox{0.80\textwidth}{\centering\vspace{2cm}
+  \textit{[Figure pending: INR sweep at SNR = 5\,dB.]}
+  \vspace{2cm}}}
+\caption{BLER vs.\ INR at SNR = 5\,dB for all implemented methods. Pending execution.}
+\label{fig:bler_inr}
+\end{figure}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Compute Budget Analysis}
+
+All methods must operate within $2.1 \times 10^6$ operations per block. Table~\ref{tab:compute} reports both analytical formulas and measured values from \texttt{compute\_cost.py}.
+
+The Viterbi decoder complexity is computed as $S \times 2 \times T \times n_{\text{outputs}}$ where $S = 64$, $T = N/n_{\text{outputs}} = 256$, and $n_{\text{outputs}} = 2$:
+\begin{equation}
+  \text{FLOPs}_{\text{Viterbi}} = 64 \times 2 \times 256 \times 2 = 65{,}536.
+\end{equation}
+
+The interference estimation cost includes an FFT contribution of $5 N\log_2 N$ complex operations, a least-squares component of $9N$, and a cancellation step of $3N$:
+\begin{equation}
+  \text{FLOPs}_{\text{IC}} = 5 \times 512 \times 9 + 9 \times 512 + 3 \times 512 = 23{,}040 + 4{,}608 + 1{,}536 = 29{,}184.
+\end{equation}
+The total for B5 is $65{,}536 + 29{,}184 = 94{,}720$.
+
+\begin{table}[h]
+\centering
+\caption{Measured Computational Cost Per Block (from \texttt{compute\_cost.py})}
+\label{tab:compute}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{Method} & \textbf{Dominant operation} & \textbf{Measured FLOPs} & \textbf{\% of Budget} \\
+\midrule
+B1: Mismatched Viterbi & Add-compare-select      & 65,536  & 3.1\% \\
+B2: Oracle Viterbi     & Add-compare-select      & 65,536  & 3.1\% \\
+B5: IC + Viterbi       & FFT + ACS               & 94,720  & 4.5\% \\
+N1: GRU ($H=64$)       & Recurrent GEMM          & [TBD --- Phase 2a] & --- \\
+N2: Neural BM          & Per-transition MLP       & [TBD --- Phase 2b] & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{remark}
+All three implemented baselines operate well within the $2.1 \times 10^6$ operation budget, using at most $4.5\%$ of the budget. The \texttt{compute\_cost.py} profiler confirms that \texttt{assert\_within\_budget} passes for B1, B2, and B5. This leaves substantial headroom for neural methods, though the analytical GRU estimate of $N(4H + 4H^2 + H) \approx 8.55 \times 10^6$ MACs exceeds the budget and will require architectural adjustment in Phase~2a.
+\end{remark}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Ablation Study}
+
+Table~\ref{tab:ablation} presents the planned ablation matrix. All methods will operate at the equal $2.1 \times 10^6$ operation budget. Results are populated during Phase~4.
+
+\begin{table}[h]
+\centering
+\caption{Ablation Matrix --- BLER at SNR = 5\,dB, INR = 5\,dB, $10^5$ MC trials}
+\label{tab:ablation}
+\begin{tabular}{@{}llllc@{}}
+\toprule
+\textbf{ID} & \textbf{Trellis} & \textbf{Decoder} & \textbf{Role} & \textbf{BLER} \\
+\midrule
+B1 & K=7 classical & Mismatched Viterbi  & Primary baseline          & --- \\
+B2 & K=7 classical & Oracle Viterbi      & Performance ceiling       & --- \\
+B5 & K=7 classical & IC + Viterbi        & DSP cancellation baseline & --- \\
+N1 & K=7 classical & GRU end-to-end      & Decoder contribution      & --- \\
+N2 & K=7 classical & Neural BM + Viterbi & Structured hybrid         & --- \\
+B3 & Random         & GRU end-to-end     & Search sanity check       & --- \\
+S1 & Searched       & GRU end-to-end     & \textbf{Core result}      & --- \\
+S2 & Searched       & Neural BM          & Optional extension        & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Discussion and Analysis}
+
+Discussion will be added once the Phase~1 Monte Carlo evaluation has been executed and BLER curves are available.
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{This Week's Progress}
+
+The following tasks were completed to bring Phase~1 to completion:
+
+\begin{itemize}
+  \item[$\bullet$] Implemented \texttt{channel.py}: AWGN generation, sinusoidal interference with the amplitude formula $A = \sqrt{2 \cdot \inr_{\text{lin}} \cdot \sigma^2}$, BPSK modulation/demodulation, full channel model, and channel parameter sampling. All smoke tests pass.
+  \item[$\bullet$] Implemented \texttt{trellis.py}: trellis FSM dataclass with encode and validate methods, NASA $K{=}7$ code loader (generators 171, 133 octal), random trellis generator for baseline B3, and block termination. Validation confirms the NASA code is non-catastrophic, fully connected, and terminable.
+  \item[$\bullet$] Implemented \texttt{decoders.py}: vectorized Viterbi decoder using a reverse-trellis formulation with NumPy broadcasting, optional C extension via ctypes, mismatched branch metric (Eq.~\ref{eq:mm_bm}), and oracle branch metric with interference subtraction.
+  \item[$\bullet$] Implemented \texttt{interference\_est.py}: FFT-based period estimation over the valid range $P \in [8, 32]$, least-squares amplitude/phase fitting with top-5 frequency candidates, and combined estimate-and-cancel pipeline.
+  \item[$\bullet$] Implemented \texttt{baselines.py}: wrapper functions for B1, B2, and B5 that integrate the encoder, channel, decoders, and interference estimation modules.
+  \item[$\bullet$] Implemented \texttt{compute\_cost.py}: analytical FLOPs counting for Viterbi and IC+Viterbi, latency measurement via \texttt{time.perf\_counter}, budget assertion, and markdown table generation. Measured values: B1/B2 at 65,536 FLOPs (3.1\% of budget), B5 at 94,720 FLOPs (4.5\% of budget).
+  \item[$\bullet$] Implemented \texttt{eval.py}: Monte Carlo BLER estimation with Wilson confidence intervals, SNR sweep with incremental saving, method wrapper factories for B1/B2/B5, and Phase~1 evaluation runner with automatic plotting and compute-cost reporting.
+  \item[$\bullet$] Implemented \texttt{plot\_utils.py}: paper-quality BLER vs.\ SNR and BLER vs.\ INR plotting functions with consistent method styling, confidence interval bands, and dual PDF/PNG output.
+  \item[$\bullet$] Wrote and passed all 10 validation tests across three test files: noiseless round-trip (4 tests), AWGN theory consistency (3 tests), and oracle-vs-mismatched dominance (3 tests).
+\end{itemize}
+
+\noindent Issues currently open:
+\begin{itemize}
+  \item[$\circ$] The full Phase~1 Monte Carlo evaluation (\texttt{eval.py} with $10^5$ trials) has not yet been run. All code is ready; execution is pending to generate the BLER curves and populate the results directory.
+  \item[$\circ$] The analytical GRU operation count ($\approx 8.55$M MACs for $H{=}64$) exceeds the $2.1$M budget by ${\sim}4\times$. Architecture adjustments will be needed in Phase~2a.
+\end{itemize}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Next Steps}
+
+The following tasks are scheduled for Phase~2a (GRU End-to-End Decoder), drawn from the Phase~2 checklist in \texttt{CLAUDE.md}:
+
+\begin{enumerate}
+  \item \texttt{neural\_decoder.py}: GRU with 64 hidden units, verify $\leq 2.1$M ops via op counter.
+  \item Training loop: randomize SNR $\in [0,10]$\,dB, INR $\in [-5,10]$\,dB, $P \in [8,32]$, $\varphi \in [0,2\pi]$ per batch.
+  \item Evaluate: generalization to INR/$P$ values outside training distribution.
+  \item Compare N1 vs B1 --- must beat by $\geq 0.5$\,dB at $\bler = 10^{-3}$ for Phase~2 success.
+\end{enumerate}
+
+\noindent The success criterion for Phase~2a is: N1 beats B1 by $\geq 0.5$\,dB at $\bler = 10^{-3}$; training is stable.
+
+% ════════════════════════════════════════════════════════════════════════════
+\end{document}

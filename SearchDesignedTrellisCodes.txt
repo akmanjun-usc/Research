@@ -1,0 +1,132 @@
+﻿Project Brief: Search-Designed Trellis Codes with Neural Decoding for Realistic, Mismatched Channels
+1) Motivation and Big Picture
+Modern channel codes—turbo, LDPC, and polar—already achieve extremely small gaps to Shannon capacity on the canonical settings they were designed for (memoryless AWGN or well-modeled fading with good channel estimation, moderate-to-long blocklengths, and decoders allowed to run iterative algorithms with accurate likelihoods). In those regimes, it is unlikely that “yet another code” will produce a meaningful improvement in BLER vs SNR without incurring substantial complexity.
+However, many real-world communication settings are not clean AWGN with perfectly modeled likelihoods. Practical links can be dominated by mismatch (imperfect channel knowledge), structured interference (periodic or bursty), non-Gaussian noise (heavy tails, impulsive interference), channels with memory (residual ISI, colored noise, time correlation), and/or strict hardware/latency constraints (limited precision, fixed compute budgets, low-power devices). In such settings, classical “capacity-approaching” codes may remain good, but their performance can degrade sharply if the decoder’s assumed likelihood model is wrong, if iterative decoding is curtailed, or if the receiver has to perform joint tasks (synchronization/equalization/detection/decoding) under resource constraints.
+This project explores a design space that is less studied than LDPC/polar code design: general trellis-based codes (finite-state codes) co-designed with neural decoders, where the trellis itself is optimized by search (evolutionary algorithms / simulated annealing / other discrete optimization) for a specific constrained inference class and a specific family of realistic channels. The expected value is not “beating polar codes on AWGN,” but achieving better robustness, latency/compute efficiency, and performance under mismatch for structured channels.
+2) Conceptual Background: From Convolutional Codes to General Trellis Codes
+A convolutional code can be viewed as a special case of a time-indexed trellis: at each time step, the encoder is in a state, and each possible input causes a transition to a next state while emitting output symbols. Valid codewords correspond to valid paths through this layered directed graph. Convolutional codes impose strong algebraic structure (shift registers, linear generator polynomials), which enables efficient maximum-likelihood decoding via Viterbi/BCJR and facilitates distance analysis.
+A broader family—call it finite-state trellis codes—drops the requirement that “next state and output are linear functions of the previous state and input” and retains only the notion that:
+* There is a finite set of states at each time,
+* There are directed edges between state layers,
+* Edges carry output labels (and possibly input labels),
+* Codewords correspond to paths.
+Within this generalization, we can consider:
+* time-invariant vs time-varying trellises,
+* linear vs nonlinear transition/output labeling,
+* tail-biting or terminated structures,
+* variable-rate behavior (state-dependent puncturing/outputs),
+* and “graph-first” trellises designed for specific decoding constraints.
+Classically, a key attraction of trellises is that they support dynamic programming decoders (Viterbi for ML sequence estimation, BCJR for bitwise posteriors). But in this project we explicitly consider neural decoders, which changes the design objective: rather than optimizing for ML decoding with perfect likelihoods, we can optimize for the performance achieved by a constrained learned inference algorithm under realistic distortions and mismatch.
+3) Why Classical Codes Dominate in Standard Regimes (and What That Implies)
+It is important to be honest about the baseline: on standard memoryless channels with well-calibrated soft information and moderate blocklengths, CRC-aided polar with SCL decoding and strong LDPC families set an extremely high bar—especially at short to medium lengths used in practice. Any claim of superiority must specify a regime where the baseline is not already essentially optimal under fair complexity.
+Therefore, a credible research direction must change the objective from “gap to Shannon limit on AWGN” to something like:
+* robust BLER under mismatch and structured interference,
+* best BLER at fixed latency/compute,
+* best BLER with quantized/low-precision receiver metrics,
+* best BLER when the receiver must jointly handle synchronization/equalization plus decoding,
+* best performance across a distribution of channel conditions without per-condition re-tuning.
+The project should be framed as co-design under constraints rather than as a direct competitor to idealized capacity-approaching designs.
+4) What the Recent Literature Suggests (High-Level Takeaways)
+Over roughly the last decade, a cluster of papers has explored neural decoding in trellis-related settings. The key patterns are:
+1. Neural decoders for convolutional/turbo structures
+A number of works train RNN-based or iterative neural architectures to decode convolutional and turbo codes. Some approaches are fully data-driven (end-to-end neural turbo decoding), while others are “model-driven” (unrolling the steps of classical MAP/max-log-MAP decoding and learning a small number of parameters). The consistent reported benefits are often:
+   * improved robustness to non-idealities or mismatch,
+   * fewer iterations for similar performance in certain regimes,
+   * or lower error floors for some configurations,
+rather than dramatic improvements in the clean AWGN setting.
+      2. Meta-learning / adaptation across channel conditions
+Some work treats the channel as a “task” and uses meta-learning so the decoder can adapt quickly with few samples/pilots. This supports the hypothesis that neural decoders can be valuable when the channel varies and classical assumptions are violated.
+      3. Trellis inference for channels with memory or synchronization errors
+There is an especially strong theme in synchronization-error channels (insertions/deletions/substitutions) and related “drift-state” inference problems: classical BCJR-type methods can become computationally infeasible when jointly processing multiple corrupted copies (e.g., multiple reads in storage-like settings). Transformer-style decoders have been proposed to approximate trellis inference while changing the scaling laws (e.g., avoiding exponential scaling in number of copies). This underscores a broader point: the neural component can be valuable when exact trellis inference is too expensive or the model is wrong.
+      4. Protocol variation (puncturing/rate matching) as a real practical challenge
+Some recent work explicitly addresses puncturing and rate families (e.g., standards-like convolutional/turbo variants), proposing decoder architectures conditioned on puncturing patterns. This illustrates a practical angle for neural decoders: generalization across a family of related trellis observation patterns.
+Most importantly for this project: the literature largely innovates on the decoder, while keeping the code/trellis fixed. That leaves open a potentially novel direction: search over trellis structures and labelings, optimized end-to-end with a neural decoder under realistic channel families.
+5) Proposed Research Goal
+Design and evaluate a search-optimized finite-state trellis code (possibly nonlinear/time-varying within constraints) paired with a neural decoder (or neural-guided inference) targeting a challenging channel family with structured impairment—e.g., patterned interference, bursty/impulsive noise, residual ISI/colored noise, or mismatch in the receiver’s channel knowledge.
+The guiding thesis:
+“When channels are mismatched, structured, or computationally constrained, the best code is not necessarily the one optimized for ideal ML decoding on memoryless Gaussian noise; instead, the best end-to-end system may be obtained by co-designing the trellis and a constrained learned decoder for the realistic impairment family.”
+6) Candidate “Challenging Channel” Targets (Pick One Primary)
+A. Patterned interference / bursty corruption
+Examples: periodic narrowband interferer, intermittent jammer, burst errors with structured timing, or interference correlated with symbol position.[a]
+B. Non-Gaussian / impulsive noise
+Examples: mixture noise (Gaussian + rare high-variance spikes), heavy-tailed (Student-t), or impulsive man-made interference.
+C. Channels with memory
+Examples: residual ISI after imperfect equalization, colored noise, time-correlated fading plus imperfect estimation.
+D. Low-precision receiver metrics / quantized LLRs
+Examples: 3–5 bit quantized soft information, integer-only decoding budget.
+The student should select one target early and build the story around it. Patterned interference is a good fit because it creates “structure” that a learned decoder can exploit and that classical decoders (with mismatched likelihoods) may handle poorly.
+7) Concrete Research Plan and Milestones
+Phase 0: Define the sandbox (1–2 weeks)[b]
+         * Choose blocklength range (e.g., 128–512 bits) and rate (e.g., 1/2 or 2/3).
+         * Choose a state budget for the trellis (e.g., S = 16, 32, or 64) to control decoding complexity.
+         * Define the channel family precisely (including interference parameters and how they vary).
+         * Define constraints: latency/compute budget, whether training-time channel labels are available, and what receiver observables exist.
+Deliverable: a short “spec” of the channel model, performance metric (BLER at target SNR range), and complexity constraints.
+Phase 1: Strong baselines (2–3 weeks)
+Implement and reproduce baseline performance:
+         * A modern short-block baseline appropriate to the regime (e.g., CRC-aided polar with small/moderate list sizes, or LDPC with capped iterations) under the same impairment model.
+         * A convolutional or tail-biting convolutional baseline matched to similar complexity.
+         * A mismatched-decoder baseline (e.g., AWGN-metric decoding when the noise/interference is non-Gaussian) to quantify the gap due to mismatch.
+Deliverable: baseline BLER curves and runtime/latency estimates under the chosen impairment model.
+Phase 2: Neural decoder baseline (2–4 weeks)
+Before changing the trellis, validate that a learned decoder helps under the impairment model:
+         * Train a neural decoder for a fixed, known trellis (e.g., a standards-like convolutional code or a simple trellis code).
+         * Candidate architectures:
+         * neural BCJR / unrolled inference (model-driven),
+         * small GRU/bi-GRU sequence decoder,
+         * lightweight transformer with limited context,
+         * neural beam-search / neural scoring over paths.
+         * Evaluate robustness: train on a distribution of impairment parameters and test on shifted parameters.
+Deliverable: evidence that neural decoding improves robustness or achieves similar reliability at lower compute under the impairment family.
+Phase 3: Trellis search with decoder-in-the-loop (4–8 weeks)
+Now the core novelty: optimize the trellis itself.
+Trellis parameterization (search space):
+         * Time-invariant finite-state machine with fixed outdegree = 2𝑘2k per state.
+         * Each transition defines next state and output label (binary output or q-ary).
+         * Enforce constraints: non-catastrophic behavior (avoid zero-weight cycles), strong connectivity/reachability, and controlled branching.
+Search methods:
+         * Evolutionary algorithm: mutate transition table and output labels; select based on fitness.
+         * Simulated annealing: local rewiring / label flips with acceptance based on fitness.
+         * (Optional) a differentiable relaxation (Gumbel-softmax) for parts of the trellis to reduce search cost.
+Fitness evaluation (practical):
+         * Use a two-tier evaluation to keep it feasible:
+         1. Cheap proxy score (short Monte Carlo at a couple SNR points, or a truncated error-event enumeration proxy where applicable).
+         2. Periodic “full evaluation” with a fixed training budget for the neural decoder and more thorough BLER curves for the top candidates.
+Deliverable: a set of candidate trellises on a Pareto frontier (BLER vs compute/latency), under the target impairment family.
+Phase 4: Analysis and ablations (2–4 weeks)
+         * Compare “searched trellis + neural decoder” vs:
+         * same trellis with classical decoder (to isolate the decoder’s contribution),
+         * classical trellis with same neural decoder (to isolate trellis contribution),
+         * strong modern baselines (polar/LDPC under fair complexity caps).
+         * Stress test generalization:
+         * mismatch in interference pattern parameters,
+         * different burst lengths or periodicities,
+         * slightly different SNR ranges than training.
+         * Interpretability/structure:
+         * analyze which error events dominate,
+         * examine whether the trellis introduces implicit interleaving-like behavior,
+         * investigate whether the learned decoder is exploiting time structure.
+Deliverable: a clear story of why the joint design helps, and where it helps.
+8) Evaluation Metrics and “Win Conditions”
+Since capacity-approaching performance on ideal channels is not the objective, the project should define clear win conditions such as:
+         * Robustness: lower BLER than strong baselines when the decoder’s assumed channel is mismatched, or when impairment parameters shift.
+         * Efficiency: same BLER at lower latency/compute (fixed iteration/list-size caps).
+         * Graceful degradation: smaller performance cliff as interference strengthens or becomes more bursty.
+         * Hardware realism (optional): performance under quantized LLRs / reduced precision.
+A strong paper-style result would show a Pareto improvement: e.g., at a fixed decode budget, joint trellis+neural design beats polar/LDPC configured to respect the same budget, on the realistic channel family.
+9) Why This Can Be Novel
+The main novelty opportunity is that most existing “trellis + neural decoding” work focuses on learning better decoding for fixed classical codes. There is substantially less work that treats the trellis as a design object and uses search or co-optimization to discover trellises that are particularly compatible with:
+         * a constrained neural inference architecture,
+         * and a structured/mismatched channel family.
+If executed carefully (strong baselines, clear constraints, realistic impairment model, robust evaluation), this can yield publishable insights even if it does not beat classical baselines on ideal AWGN.
+10) Suggested Starting Point (Pragmatic Recommendation)
+To keep scope manageable:
+         * Start with BPSK and a binary trellis rate 1/2, with S = 32 states.
+         * Use a patterned interference model (e.g., a periodic additive interferer with random phase/amplitude drawn per block, or bursty interference with Markov structure).
+         * Build baselines: polar SCL (with fixed small list sizes), convolutional Viterbi/BCJR with mismatched metric.
+         * Train a small neural decoder (e.g., model-driven unrolled variant or compact sequence model).
+         * Only then introduce trellis search, with strict constraints and a compute-aware fitness function.
+
+
+[a]could be our focus
+[b]Can ignore these time estimates - they are random and arbitrary; in the age of claude-code/codex everything could move faster!

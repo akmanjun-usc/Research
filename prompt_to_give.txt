@@ -1,0 +1,33 @@
+Read skills/documentation/SKILL.md, CLAUDE.md, and Phase0_Specification.txt before doing anything else. Then follow the SKILL.md workflow exactly.
+
+We are currently at the end of Phase 1. Generate the project progress report at reports/progress_report.tex and compile it to PDF. This is a living document — it will be overwritten and recompiled every week as the project advances. It is not a weekly log; it is a complete, current snapshot of the project.
+
+Before writing any LaTeX, complete Steps 1–5 of skills/documentation/SKILL.md in full:
+- Read every .py file and classify each as fully implemented / partial / stub / absent
+- Run the validation tests and record actual pass/fail outcomes
+- Load every file in results/ and extract the real BLER values, compute numbers, and latency figures
+- List every image in results/, check file sizes are non-zero, and map each to its report section
+
+Write reports/progress_report.tex using the Step 6 template. Don't compile the file but ensure that there are no errors.
+
+Expected depth for the current phase:
+- Sections 1–4 (Introduction, System Model, Channel Model, Baseline Methods): full mathematical depth
+- Section 10 (Compute Budget): use measured values from compute_cost.py output, not just formulas
+- Section 9 (Experimental Results): include every BLER curve and validation result that exists in results/
+- Sections 5–8 (Neural Decoder, Neural BM, Interference Estimation, Trellis Search): one-sentence stubs only
+- Section 11 (Ablation): show the planned table structure with dashes
+- Section 13 (This Week's Progress): summarise what was completed to reach end of Phase 1
+- Section 14 (Next Steps): copy the exact unchecked Phase 2a tasks from CLAUDE.md
+
+Do not describe any unimplemented component as if it works. Do not fabricate numbers — every numerical value must come from results/ files or CLAUDE.md.
+
+
+
+
+Read skills/documentation/SKILL.md, CLAUDE.md, and Phase0_Specification.txt before doing anything else. Then follow the skills/documentation/SKILL.md workflow exactly.
+
+Regenerate reports/progress_report.tex from scratch and recompile to PDF. The previous version is being replaced entirely — do not patch it.
+
+What changed this week: [one or two sentences describing what you did, e.g. "Implemented the GRU decoder in neural_decoder.py, verified op count against compute_cost.py, and ran initial training for 50 epochs. Training loss is converging but N1 does not yet beat B1."]
+
+Before writing, complete Steps 1–5 of SKILL.md in full — re-read all code and re-extract all results fresh. Do not reuse assumptions from any previous run. Don't change coverpage and abstract page.
