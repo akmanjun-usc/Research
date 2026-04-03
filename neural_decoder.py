@@ -347,7 +347,7 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = ReduceLROnPlateau(
         optimizer, mode='min', patience=config.lr_decay_patience,
-        factor=config.lr_factor, verbose=True,
+        factor=config.lr_factor,
     )
     criterion = nn.BCEWithLogitsLoss()
 
