@@ -370,6 +370,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
 
     rng = np.random.default_rng(seed + 1)
     best_val_bit_acc = 0.0
+    best_epoch = -1
     patience_counter = 0
     training_log = []
 
@@ -431,7 +432,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
         with open(log_path, 'w') as f:
             json.dump(training_log, f, indent=2)
 
-        if epoch % 5 == 0:
+        if epoch % 10 == 0:
             print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | bit_acc={avg_bit_acc:.4f} | "
                   f"val_bit_acc={val_bit_acc:.4f} | val_bler={val_bler:.4f} | "
                   f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
@@ -448,8 +449,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
                 'val_bit_acc': val_bit_acc,
                 'loss': avg_loss,
             }, ckpt_path)
-            print(f"  -> New best! val_bit_acc={val_bit_acc:.4f} val_bler={val_bler:.4f} "
-                  f"Saved to {ckpt_path}")
+            best_epoch = epoch
         else:
             patience_counter += 1
             if patience_counter >= config.patience:
@@ -457,7 +457,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
                 break
 
     print("-" * 60)
-    print(f"Training complete. Best val bit_acc: {best_val_bit_acc:.4f}")
+    print(f"Training complete. Best val bit_acc: {best_val_bit_acc:.4f} (epoch {best_epoch})")
     print(f"Checkpoint: {ckpt_path}")
     print(f"Log: {log_path}")
 
