@@ -53,10 +53,10 @@ class TrainConfig:
     bidirectional: bool = True
     use_batchnorm: bool = False
 
-    # Training — CLAUDE.md: Adam lr=1e-3, reduce to 1e-4 after 50 epochs
-    lr: float = 1e-3
+    # Training — lr=5e-3, constant (no decay: lr_step_factor=1.0)
+    lr: float = 5e-3
     lr_step_epoch: int = 50
-    lr_step_factor: float = 0.1
+    lr_step_factor: float = 1.0
     grad_clip: float = 1.0
     batch_size: int = 128
     batches_per_epoch: int = 1000
