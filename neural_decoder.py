@@ -378,7 +378,7 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
 
             epoch_loss += loss.item()
