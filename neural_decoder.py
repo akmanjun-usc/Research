@@ -298,9 +298,15 @@ def validate_bler(
 # ─────────────────────────────────────────────
 # Training loop
 # ─────────────────────────────────────────────
-def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
+def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecoder] = None) -> BiRNNDecoder:
     """
     Train a BiRNNDecoder model.
+
+    Args:
+        config: training configuration
+        seed: random seed
+        model: optional pretrained model to continue training (for curriculum learning).
+               If None, a fresh model is created from config.
 
     Returns:
         trained model (loaded from best checkpoint)
@@ -312,13 +318,18 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
     print(f"Training BiRNNDecoder ({config.cell_type}, h={config.hidden_size}) "
           f"on {device}")
 
-    model = BiRNNDecoder(
-        hidden_size=config.hidden_size,
-        input_dim=config.input_dim,
-        cell_type=config.cell_type,
-        bidirectional=config.bidirectional,
-        use_batchnorm=config.use_batchnorm,
-    ).to(device)
+    if model is None:
+        model = BiRNNDecoder(
+            hidden_size=config.hidden_size,
+            input_dim=config.input_dim,
+            cell_type=config.cell_type,
+            bidirectional=config.bidirectional,
+            use_batchnorm=config.use_batchnorm,
+        ).to(device)
+        print("  Initialized fresh model")
+    else:
+        model = model.to(device)
+        print("  Resuming from pretrained model (curriculum)")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
