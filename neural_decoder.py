@@ -371,10 +371,6 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     if model is None:
         model = BiRNNDecoder(
             hidden_size=config.hidden_size,
-            input_dim=config.input_dim,
-            cell_type=config.cell_type,
-            bidirectional=config.bidirectional,
-            use_batchnorm=config.use_batchnorm,
         ).to(device)
         print("  Initialized fresh model")
     else:
