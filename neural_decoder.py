@@ -253,12 +253,17 @@ def validate_bler(
     device: torch.device,
     seed: int = 99,
     batch_size: int = 256,
-) -> float:
-    """Compute BLER on a validation set at fixed SNR/INR. Returns BLER."""
+) -> tuple[float, float]:
+    """Compute BLER and bit accuracy on a validation set at fixed SNR/INR.
+
+    Returns:
+        (bler, bit_acc) — block error rate and mean bit accuracy
+    """
     model.eval()
     rng = np.random.default_rng(seed)
     n_errors = 0
     n_done = 0
+    total_bit_acc = 0.0
 
     while n_done < n_blocks:
         bs = min(batch_size, n_blocks - n_done)
@@ -289,10 +294,13 @@ def validate_bler(
         for i in range(bs):
             if not np.array_equal(preds[i], info_bits[i]):
                 n_errors += 1
+            total_bit_acc += np.mean(preds[i] == info_bits[i])
 
         n_done += bs
 
-    return n_errors / n_blocks
+    bler = n_errors / n_blocks
+    bit_acc = total_bit_acc / n_blocks
+    return bler, bit_acc
 
 
 # ─────────────────────────────────────────────
@@ -361,7 +369,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     log_path = log_dir / f"training_{config.cell_type.lower()}_h{config.hidden_size}.json"
 
     rng = np.random.default_rng(seed + 1)
-    best_val_bler = float('inf')
+    best_val_bit_acc = 0.0
     patience_counter = 0
     training_log = []
 
@@ -404,7 +412,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
         scheduler.step()
 
         # Validation
-        val_bler = validate_bler(
+        val_bler, val_bit_acc = validate_bler(
             model, trellis, pool,
             config.val_snr_db, config.val_inr_db, config.val_blocks,
             device, seed=99,
@@ -414,6 +422,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
             'epoch': epoch,
             'loss': avg_loss,
             'val_bler': val_bler,
+            'val_bit_acc': val_bit_acc,
             'lr': current_lr,
             'time_s': epoch_time,
         }
@@ -424,20 +433,23 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
 
         if epoch % 5 == 0:
             print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | bit_acc={avg_bit_acc:.4f} | "
-                  f"val_bler={val_bler:.4f} | lr={current_lr:.1e} | time={epoch_time:.1f}s")
+                  f"val_bit_acc={val_bit_acc:.4f} | val_bler={val_bler:.4f} | "
+                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
 
-        # Checkpoint — save whenever val_bler improves
-        if val_bler < best_val_bler:
-            best_val_bler = val_bler
+        # Checkpoint — save when val bit accuracy improves
+        if val_bit_acc > best_val_bit_acc:
+            best_val_bit_acc = val_bit_acc
             patience_counter = 0
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'config': asdict(config),
                 'epoch': epoch,
                 'val_bler': val_bler,
+                'val_bit_acc': val_bit_acc,
                 'loss': avg_loss,
             }, ckpt_path)
-            print(f"  -> New best! val_bler={val_bler:.4f} Saved to {ckpt_path}")
+            print(f"  -> New best! val_bit_acc={val_bit_acc:.4f} val_bler={val_bler:.4f} "
+                  f"Saved to {ckpt_path}")
         else:
             patience_counter += 1
             if patience_counter >= config.patience:
@@ -445,7 +457,7 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
                 break
 
     print("-" * 60)
-    print(f"Training complete. Best val BLER: {best_val_bler:.4f}")
+    print(f"Training complete. Best val bit_acc: {best_val_bit_acc:.4f}")
     print(f"Checkpoint: {ckpt_path}")
     print(f"Log: {log_path}")
 
