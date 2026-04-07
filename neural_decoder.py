@@ -406,8 +406,9 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
         with open(log_path, 'w') as f:
             json.dump(training_log, f, indent=2)
 
-        print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | val_bler={val_bler:.4f} | "
-              f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
+        if epoch % 50 == 0:
+            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | val_bler={val_bler:.4f} | "
+                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
 
         # Checkpoint — save whenever val_bler improves
         if val_bler < best_val_bler:
