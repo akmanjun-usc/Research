@@ -83,13 +83,13 @@ where:
 The decoder is a **Bidirectional RNN** (default: GRU) that processes the full received sequence of length 524 and outputs 256 info bit logits.
 
 ```
-Input:  (batch, 524, 1) — raw received signal, one scalar per time step
-BiGRU:  h=32/dir → concat → (batch, 524, 64)
-Output: Linear(64, 1) shared across all 524 positions → (batch, 524)
-Select: even positions 0, 2, 4, ..., 510 → (batch, 256) info bit logits
+Input:   (batch, 524, 1) — raw received signal, one scalar per time step
+BiGRU:   h=32/dir → concat → (batch, 524, 64)
+Pool:    Mean over time dimension → (batch, 64)
+Output:  Linear(64, 256) → (batch, 256) info bit logits
 ```
 
-**Info bit positions:** For a rate-1/2 code, info bits map to even-indexed coded positions `[0, 2, 4, ..., 510]` — the first 512 coded symbols. The last 12 positions (512–523) correspond to tail bit encoding and are **excluded** from loss and output.
+**Mean-pooling design:** Rather than selecting specific coded positions, the GRU output is averaged over all 524 time steps to produce a single 64-dim context vector. A `Linear(64, 256)` layer then maps this directly to 256 info bit logits. This gives the model a global view of the entire sequence and provides cleaner gradient flow compared to the previous per-timestep approach.
 
 ### 3.2 GRU Cell Equations (per direction, per time step)
 
@@ -104,34 +104,37 @@ Where `⊙` is element-wise multiplication and `[·, ·]` is concatenation.
 
 ### 3.3 Output Layer
 
-At each position t, the concatenated hidden state `c[t]` (64 dims from both forward and backward directions) maps to one logit:
+The GRU output is mean-pooled over the time dimension to produce a single context vector `c` (64 dims), which is then mapped to all 256 info bit logits:
 
 ```
-logit[t] = W_out · c[t] + b_out
+c = (1/N) Σ_{t=0}^{N-1} rnn_out[t]     # mean-pool: (batch, 64)
+logits = W_out · c + b_out              # Linear(64, 256): (batch, 256)
 ```
 
-`W_out` is shape `(1, 64)`, shared across all 524 positions (weight sharing). The final output selects the 256 info bit positions.
+`W_out` is shape `(256, 64)` — one row per info bit.
 
 ### 3.4 Parameter Count (h=32, input_dim=1, bidirectional)
 
 ```
-Per GRU direction: 3 gates × (h × (h + 1) + h) = 3 × (32×33 + 32) = 3 × 1056 = 3,168
-Wait — actual formula: 3 gates × (h × (h + d) + h) where d=1
+Per GRU direction: 3 gates × (h × (h + d) + h) where d=1
   = 3 × (32 × 33 + 32) = 3 × 1,088 = 3,264 per direction
 Two directions: 6,528
-Output layer: 64 × 1 + 1 = 65
-Total: ~6,593 trainable parameters
+Output layer: 64 × 256 + 256 = 16,640
+BatchNorm (if enabled): 2 × 64 = 128 (off by default)
+Total: ~23,360 trainable parameters (with BatchNorm disabled)
 ```
+
+> **Note:** The output layer accounts for most parameters (16,640 / 23,360 ≈ 71%) due to the `Linear(64, 256)` projection. The GRU itself is lightweight at 6,528 parameters.
 
 ### 3.5 RNN Cell Variants
 
 Three variants are compared at matched compute budgets:
 
-| Variant | Hidden/dir | Approx ops | Purpose |
-|---------|-----------|------------|---------|
-| Bidirectional GRU | 32 | ~6.6M (default, exceeds budget) | Primary candidate |
-| Bidirectional LSTM | 26 | comparable | Has cell state for tracking periodicity |
-| Bidirectional vanilla RNN | 32 | ~2.2M | Sanity check; expected to fail on length-524 sequences |
+| Variant | Hidden/dir | Parameters | Approx ops | Purpose |
+|---------|-----------|-----------|------------|---------|
+| Bidirectional GRU | 32 | 23,360 | ~6.6M (default, exceeds budget) | Primary candidate |
+| Bidirectional LSTM | 26 | comparable | comparable | Has cell state for tracking periodicity |
+| Bidirectional vanilla RNN | 32 | comparable | ~2.2M | Sanity check; expected to fail on length-524 sequences |
 
 > **Note:** The default h=32 BiGRU at N=524 gives ~6.6M ops, which exceeds the 2.1M budget. Architecture trimming (reduce hidden size) is required before final evaluation — see §7.
 
@@ -258,6 +261,8 @@ Per-epoch JSON log saved to `results/phase2a/logs/training_{cell_type}_h{hidden_
 ]
 ```
 
+**Console output:** Epoch summaries are printed **every 50 epochs** (not every epoch) to reduce noise. Checkpoint save messages (`-> New best!`) and early stopping messages always print regardless of this interval.
+
 ### 5.5 Training Scale
 
 | Quantity | Value |
@@ -330,19 +335,19 @@ def count_flops_birnn_analytical(hidden_size, input_dim, seq_len, cell_type, bid
     ops_per_unit = {"GRU": 6, "LSTM": 8, "RNN": 2}[cell_type]
     n_dir = 2 if bidirectional else 1
     rnn_flops = n_dir * seq_len * ops_per_unit * hidden_size * (hidden_size + input_dim)
-    linear_flops = n_dir * hidden_size * K_INFO  # output layer
+    linear_flops = n_dir * hidden_size * K_INFO  # output layer: Linear(2H, K_INFO)
     return rnn_flops + linear_flops
 ```
 
 ### 7.2 Op counts at various hidden sizes (BiGRU, d=1, N=524)
 
-| Hidden size h | Approx ops | % of 2.1M budget | Notes |
-|--------------|-----------|-----------------|-------|
-| 32 | ~6.63M | 316% | **Default; exceeds budget 3×** |
-| 20 | ~2.52M | 120% | Still over budget |
-| 16 | ~1.62M | 77% | Under budget |
-| 18 | ~2.04M | 97% | Under budget |
-| 17 | ~1.83M | 87% | Under budget |
+| Hidden size h | Parameters | Approx ops | % of 2.1M budget | Notes |
+|--------------|-----------|-----------|-----------------|-------|
+| 32 | 23,360 | ~6.63M | 316% | **Default; exceeds budget 3×** |
+| 20 | ~TBD | ~2.52M | 120% | Still over budget |
+| 16 | ~TBD | ~1.62M | 77% | Under budget |
+| 18 | ~TBD | ~2.04M | 97% | Under budget |
+| 17 | ~TBD | ~1.83M | 87% | Under budget |
 
 > **Action required before final evaluation:** Use `count_flops_birnn_analytical` to sweep h and find the exact hidden size fitting within 2.1M ops. The test `test_find_budget_hidden_size` in `test_neural_ops.py` does this automatically.
 
@@ -362,11 +367,11 @@ The test `test_neural_ops.py::TestAnalyticalOps::test_bigru_h32_ops` documents t
 
 1. **Input is scalar:** Each time step receives a single float `r[t]` (the raw received BPSK+noise+interference sample). There is no explicit time index or channel state provided as input — the model must infer all information from the received sequence alone.
 
-2. **Rate-1/2 encoding:** Info bits map to even-indexed coded positions `{0, 2, 4, ..., 510}`. This is hardcoded in `BiRNNDecoder.info_positions` as `torch.arange(0, 2*K_INFO, 2)`.
+2. **Mean-pooled output:** The GRU output is averaged over all 524 time steps (`rnn_out.mean(dim=1)`) to produce a fixed-length 64-dim context vector, which is then projected to 256 info bit logits via `Linear(64, 256)`. There is no explicit mapping between coded positions and info bit positions — the model learns this mapping implicitly.
 
-3. **Tail bit positions excluded from loss:** The 12 coded bits at positions 512–523 (from the 6 tail bits appended for trellis termination) are not included in the BCE loss computation or output selection.
+3. **Tail bits handled implicitly:** The 12 coded bits at positions 512–523 (from tail bits) contribute to the mean pool and thus the global context, but there is no explicit exclusion — the model sees all 524 time steps equally.
 
-4. **Shared output weights:** The same `Linear(64, 1)` layer processes each of the 524 time steps. This is a form of weight sharing that reduces parameters and enforces time-translation equivariance.
+4. **Global output projection:** A single `Linear(64, 256)` maps the pooled representation to all 256 info bit logits simultaneously. This replaces the earlier per-timestep `Linear(64, 1)` + position-selection design.
 
 5. **Logits, not probabilities, returned by forward pass:** `model(x)` returns raw logits. `sigmoid` is applied externally (in `make_decoder_n1`) or implicitly within `BCEWithLogitsLoss`. This is numerically more stable than computing `BCE(sigmoid(logits), targets)`.
 
@@ -400,7 +405,7 @@ The test `test_neural_ops.py::TestAnalyticalOps::test_bigru_h32_ops` documents t
 
 ## 9. Tests
 
-Three test files in `tests/` cover Phase 2a:
+Four test files in `tests/` cover Phase 2a:
 
 ### 9.1 `test_neural_ops.py` — Architecture verification
 
@@ -409,11 +414,11 @@ Three test files in `tests/` cover Phase 2a:
 | `TestOutputShape::test_single_sample` | Forward pass output shape (1, 256) | Exact |
 | `TestOutputShape::test_batch` | Batch forward pass (16, 256) | Exact |
 | `TestOutputShape::test_output_is_logits` | Output contains values < 0 or > 1 (not probabilities) | Structural |
-| `TestParameterCount::test_bigru_h32_param_count` | ~6,593 parameters | [6000, 7500] |
+| `TestParameterCount::test_bigru_h32_param_count` | ~23,360 parameters | Should be verified |
 | `TestAnalyticalOps::test_bigru_h32_ops` | ~6.6M ops for h=32 | [6M, 7.5M] |
 | `TestAnalyticalOps::test_find_budget_hidden_size` | Print max h fitting 2.1M budget | Informational |
 
-### 9.2 `test_neural_overfit.py` — Training sanity check
+### 9.2 `test_neural_overfit.py` — Training sanity check (pytest)
 
 | Test | What it checks | Threshold |
 |------|---------------|-----------|
@@ -422,7 +427,36 @@ Three test files in `tests/` cover Phase 2a:
 
 **Setup:** Batch of 4 blocks, SNR=10 dB, INR=0 dB (nearly interference-free), period=16, LR=5e-3.
 
-### 9.3 `test_neural_vs_b1.py` — Performance gating (requires trained checkpoint)
+### 9.3 `test_overfit_gru_batch.py` — Standalone overfit script
+
+A standalone Python script (no pytest required) that overfits the BiGRU decoder on a single small batch and prints epoch-by-epoch loss. Designed for quick interactive sanity checking.
+
+```bash
+python tests/test_overfit_gru_batch.py
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Batch size | 4 |
+| Epochs | 500 |
+| LR | 5e-3 (Adam) |
+| SNR | 10.0 dB (fixed) |
+| INR | 0.0 dB (fixed) |
+| Period | 16 (fixed) |
+| Print every | 50 epochs |
+
+**Pass criteria:** Final loss < 0.05, loss dropped ≥ 50%, bit accuracy ≥ 95%.
+
+**Verified result (with mean-pool architecture):**
+```
+Epoch   0,  Loss: 0.692567
+Epoch 200,  Loss: 0.065533
+Epoch 400,  Loss: 0.004981
+Final loss:  0.003044  (↓ 99.6%)
+Bit accuracy: 100.00%  (1024/1024 bits correct)  ✓ PASS
+```
+
+### 9.4 `test_neural_vs_b1.py` — Performance gating (requires trained checkpoint)
 
 | Test | What it checks | Threshold |
 |------|---------------|-----------|
@@ -431,12 +465,15 @@ Three test files in `tests/` cover Phase 2a:
 
 **Note:** These tests are marked `@pytest.mark.slow` and `@requires_checkpoint`. They are skipped if `results/phase2a/checkpoints/best_gru.pt` does not exist.
 
-### 9.4 Running tests
+### 9.5 Running tests
 
 ```bash
 # Smoke tests (fast, no checkpoint needed)
 pytest tests/test_neural_ops.py -v
 pytest tests/test_neural_overfit.py -v
+
+# Standalone overfit sanity check
+python tests/test_overfit_gru_batch.py
 
 # Performance gate (requires trained checkpoint)
 pytest tests/test_neural_vs_b1.py -v -m slow
@@ -473,7 +510,7 @@ From CLAUDE.md:
 | N1 vs B1 at BLER = 10⁻³ | **N1 must beat B1 by ≥ 0.5 dB** |
 | Training stability | Val BLER decreases monotonically (or is not worse) across epochs |
 | Compute budget | Final architecture ops ≤ 2.1M per block |
-| Overfit test | Model can memorize 4 training blocks (loss < 0.4, accuracy > 0.85) |
+| Overfit test | Model can memorize 4 training blocks (loss < 0.05, accuracy ≥ 95%) |
 
 ---
 
@@ -517,7 +554,8 @@ These generalization tests distinguish a model that has genuinely learned channe
 - [x] `load_model(checkpoint_path, device)` — reconstruct from checkpoint
 - [x] Smoke test in `__main__` block
 - [x] `test_neural_ops.py` — architecture and op count tests
-- [x] `test_neural_overfit.py` — training sanity check
+- [x] `test_neural_overfit.py` — training sanity check (pytest)
+- [x] `test_overfit_gru_batch.py` — standalone overfit script (verified passing: loss 0.003, 100% accuracy)
 - [x] `test_neural_vs_b1.py` — performance gating (skips without checkpoint)
 
 ### Pending ⬜
@@ -536,4 +574,4 @@ These generalization tests distinguish a model that has genuinely learned channe
 
 ---
 
-*Last updated: April 6, 2026*
+*Last updated: April 6, 2026 — Architecture updated to mean-pool + Linear(64,256); overfit test verified passing.*

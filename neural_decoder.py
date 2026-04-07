@@ -363,6 +363,7 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
     for epoch in range(config.n_epochs):
         model.train()
         epoch_loss = 0.0
+        epoch_bit_acc = 0.0
         t0 = time.time()
 
         for _ in range(config.batches_per_epoch):
@@ -381,8 +382,12 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
             optimizer.step()
 
             epoch_loss += loss.item()
+            with torch.no_grad():
+                preds = (torch.sigmoid(logits) > 0.5).float()
+                epoch_bit_acc += (preds == info_bits).float().mean().item()
 
         avg_loss = epoch_loss / config.batches_per_epoch
+        avg_bit_acc = epoch_bit_acc / config.batches_per_epoch
         epoch_time = time.time() - t0
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
@@ -406,9 +411,9 @@ def train_model(config: TrainConfig, seed: int = 42) -> BiRNNDecoder:
         with open(log_path, 'w') as f:
             json.dump(training_log, f, indent=2)
 
-        if epoch % 50 == 0:
-            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | val_bler={val_bler:.4f} | "
-                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
+        if epoch % 5 == 0:
+            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | bit_acc={avg_bit_acc:.4f} | "
+                  f"val_bler={val_bler:.4f} | lr={current_lr:.1e} | time={epoch_time:.1f}s")
 
         # Checkpoint — save whenever val_bler improves
         if val_bler < best_val_bler:
