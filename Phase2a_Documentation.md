@@ -89,7 +89,7 @@ where:
 ### 3.1 BiRNNDecoder (class in `neural_decoder.py`)
 
 The decoder is a **Bidirectional RNN** (default: GRU) that processes the full received sequence of length 524 and outputs 256 info bit logits.
-
+It is Bidirectional because the received sequence is processed in forward direction (t=0 to t=523) and backward direction(t=523 to t=0)
 ```
 Input:   (batch, 524, 1) — raw received signal, one scalar per time step
 BiGRU:   h=32/dir → concat → (batch, 524, 64)
@@ -125,12 +125,23 @@ logits = W_out · c + b_out              # Linear(64, 256): (batch, 256)
 
 `W_out` is shape `(256, 64)` — one row per info bit. Every timestep contributes equally. This is the weakest strategy because some timesteps carry more decoding information than others, and the uniform weighting dilutes the signal.
 
-**Result:** Plateaued at 53.1% bit accuracy after 200 epochs at SNR 15–20 dB. See §10.
+**Result:** Plateaued at 52.1% bit accuracy after 200 epochs at SNR 15–20 dB. See §10.
 
-#### 3.3.2 Attention Pooling
+
+#### 3.3.2 Final Hidden States
+
+A BiGRU inherently produces a sequence summary in its final hidden states. The forward direction's final state summarizes left-to-right context; the backward direction's final state summarizes right-to-left context. Concatenating both gives a (2H)-dim vector without any pooling.
+
+```
+rnn_out, h_n = self.rnn(x)              # h_n: (2, batch, H) for bidirectional
+c = h_n.transpose(0,1).reshape(B, 2H)   # (batch, 2H)
+logits = W_out · c + b_out              # Linear(2H, 256): (batch, 256)
+```
+**Result:** Plateaued at 53.5% bit accuracy after 200 epochs at SNR 15–20 dB. Slightly better performance that **mean pooling**
+
+#### 3.3.3 Attention Pooling
 
 Instead of uniform averaging, attention pooling learns a weight per timestep. The model decides which timesteps are most important for decoding.
-
 A learned parameter vector `v` of size 2H acts as a query. For each timestep `t`, a relevance score is computed:
 
 ```
@@ -140,23 +151,8 @@ c = Σ_t a_t · h_t                       # weighted sum: (batch, 2H)
 logits = W_out · c + b_out              # Linear(2H, 256): (batch, 256)
 ```
 
-The vector `v` is initialized randomly and updated by gradient descent during training, just like all other network weights. After training, `v` points in the direction of the 2H-dimensional GRU output space that best separates important timesteps from unimportant ones. Timesteps whose GRU outputs align with `v` receive high attention weights; those pointing away receive low weights.
-
-This adds only 64 new parameters (the vector `v`), bringing the total to 23,424.
-
+The vector `v` is initialized randomly and updated by gradient descent during training, just like all other network weights. After training, `v` points in the direction of the 2H-dimensional GRU output space that best separates important timesteps from unimportant ones. Timesteps whose GRU outputs align with `v` receive high attention weights; those pointing away receive low weights. This adds only 64 new parameters (the vector `v`), bringing the total to 23,424.
 **Result:** Plateaued at 53.8% bit accuracy after 200 epochs at SNR 15–20 dB. Marginal improvement over mean pooling. See §10.
-
-#### 3.3.3 Final Hidden States (not tested)
-
-A BiGRU inherently produces a sequence summary in its final hidden states. The forward direction's final state summarizes left-to-right context; the backward direction's final state summarizes right-to-left context. Concatenating both gives a (2H)-dim vector without any pooling.
-
-```
-rnn_out, h_n = self.rnn(x)              # h_n: (2, batch, H) for bidirectional
-c = h_n.transpose(0,1).reshape(B, 2H)   # (batch, 2H)
-logits = W_out · c + b_out              # Linear(2H, 256): (batch, 256)
-```
-
-This was identified as an alternative but not tested, as the attention pooling results already indicated the bottleneck was in the GRU's representation capacity, not the pooling method.
 
 ### 3.4 Parameter Count (h=32, input_dim=1, bidirectional)
 
@@ -315,8 +311,8 @@ Training uses **on-the-fly channel randomization** with **pre-encoded codeword p
    BCE is chosen because it is smooth and differentiable (required for gradient-based training). BLER is **not** used for training — it is non-differentiable and only computed during evaluation.
 
 4. **Optimizer:** Adam
-   - LR schedule: `StepLR(step_size=50, gamma=0.1)` → LR decays from 1e-3 to 1e-4 at epoch 50
-   - Gradient clipping: `clip_grad_norm_(model.parameters(), 1.0)` — prevents exploding gradients in RNNs
+   - LR schedule: `StepLR(step_size=50, gamma=0.1)` → LR stays constant and optionally can decays by lr_step_factor at epoch % lr_step_epoch == 0
+   - Gradient clipping: `clip_grad_norm_(model.parameters(), 1.0)` — disabled but can prevents exploding gradients in RNNs
 
 ### 5.2 Validation Protocol
 
@@ -329,10 +325,7 @@ Every epoch:
   - BLER = (blocks with ≥1 bit error) / total blocks
 - Prediction: `bit = (sigmoid(logit) > 0.5)`
 
-**Early stopping:** If validation bit accuracy does not improve for `patience` consecutive epochs, training halts.
-
-> **Lesson learned:** The original implementation validated at fixed SNR=5 dB / INR=5 dB regardless of training distribution. This caused BLER to remain at 1.0 when training at higher SNR, providing no useful training signal. Validation conditions must match training conditions.
-
+**Early stopping:** If validation bit accuracy does not improve for `patience` consecutive epochs, training halts. (disabled)
 ### 5.3 Checkpointing
 
 Checkpoint saved whenever **validation bit accuracy** improves. Saved to `results/phase2a/checkpoints/best_{cell_type}.pt`.
@@ -451,14 +444,6 @@ def count_flops_birnn_analytical(hidden_size, input_dim, seq_len, cell_type, bid
 
 > **Action required before final evaluation:** Use `count_flops_birnn_analytical` to sweep h and find the exact hidden size fitting within 2.1M ops. The test `test_find_budget_hidden_size` in `test_neural_ops.py` does this automatically.
 
-### 7.3 Budget adjustment options (from CLAUDE.md)
-
-- **Option (a):** Reduce h to ~16–18 per direction
-- **Option (b):** Process in temporal chunks of length 128 with overlap
-- **Option (c):** Use unidirectional GRU h=40 (~2.0M ops); loses future context
-
-The test `test_neural_ops.py::TestAnalyticalOps::test_bigru_h32_ops` documents that h=32 gives ~6.6M ops and is marked as acceptable for initial training — budget trimming is a separate step.
-
 ---
 
 ## 8. Assumptions
@@ -494,13 +479,6 @@ The test `test_neural_ops.py::TestAnalyticalOps::test_bigru_h32_ops` documents t
 12. **Symmetric training and evaluation:** Both use `channel.py`'s `generate_interference`, `noise_var_from_snr`, and `amplitude_from_inr`. No mismatched channel assumptions in N1.
 
 13. **No test-time oracle:** N1 does not know the true `P`, `φ`, or `A` during decoding. These are only implicitly estimated from the received signal via the GRU's learned hidden representations.
-
-### 8.4 Compute measurement assumptions
-
-14. **Analytical FLOPs (multiply-adds):** Op count uses the formula `n_dir × N × 6×h×(h+d)` for GRU. This counts multiply-accumulates (MACs), not FLOPs (each MAC = 2 FLOPs). The budget convention (MACs vs FLOPs) must be consistent across all methods — `compute_cost.py` enforces this.
-
-15. **Sequence length is 524 (not 512):** Due to 12 termination coded bits. Ops scale linearly with N, so this matters for budget calculations.
-
 ---
 
 ## 9. Tests
@@ -699,21 +677,6 @@ Phase 2b uses the **same BiGRU architecture** but repurposes it for **branch met
 This decomposition plays to each component's strengths. The GRU handles the part that is hard to model analytically (unknown interference parameters). The Viterbi algorithm handles the part that is well-understood and solved exactly (trellis search).
 
 The Phase 2a negative result makes this comparison clean and compelling: same architecture, same parameter count, different role — expected dramatic improvement.
-
----
-
-## 14. Generalization Tests (Post-Training)
-
-After training, evaluate at out-of-distribution channel conditions:
-
-| Test | In-distribution | OOD condition | What we want |
-|------|----------------|--------------|--------------|
-| High INR | INR ≤ 10 dB | INR = 12, 15 dB | Graceful degradation, not cliff |
-| Short period | P ≥ 8 | P = 4 | Partial degradation acceptable |
-| Long period | P ≤ 32 | P = 48 | Likely fails; expected |
-| SNR shift | SNR ∈ [0,10] | SNR ∈ [5,15] | Should still decode at high SNR |
-
-These generalization tests distinguish a model that has genuinely learned channel structure from one that has merely memorized training statistics.
 
 ---
 

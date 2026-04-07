@@ -53,8 +53,8 @@ class TrainConfig:
     bidirectional: bool = True
     use_batchnorm: bool = False
 
-    # Training — lr=5e-3, constant (no decay: lr_step_factor=1.0)
-    lr: float = 5e-3
+    # Training — lr=1e-3, constant (no decay: lr_step_factor=1.0)
+    lr: float = 1e-3
     lr_step_epoch: int = 50
     lr_step_factor: float = 1.0
     grad_clip: float = 1.0
@@ -89,107 +89,107 @@ class TrainConfig:
 
 
 # ─────────────────────────────────────────────
-# Model: Bidirectional RNN Decoder (PREVIOUS VERSION — commented out)
+# Model: Bidirectional RNN Decoder (final hidden state pooling)
 # ─────────────────────────────────────────────
-# class BiRNNDecoder(nn.Module):
-#     """
-#     Bidirectional RNN decoder for convolutional codes.
-#
-#     Per CLAUDE.md:
-#       Input:  (batch, 524, 1) — each received BPSK symbol is one time step
-#       BiGRU:  h=32/dir -> concat -> (batch, 524, 64)
-#       Output: Linear(64,1) at each position -> sigmoid -> 524 probabilities
-#       Select: info bit positions 0,2,4,...,510 -> 256 info bit predictions
-#     """
-#
-#     def __init__(
-#         self,
-#         hidden_size: int = 32,
-#         input_dim: int = 1,
-#         cell_type: str = "GRU",
-#         bidirectional: bool = True,
-#         use_batchnorm: bool = False,
-#         n_info: int = K_INFO,
-#     ) -> None:
-#         super().__init__()
-#         self.hidden_size = hidden_size
-#         self.input_dim = input_dim
-#         self.cell_type = cell_type
-#         self.bidirectional = bidirectional
-#         self.use_batchnorm = use_batchnorm
-#         self.n_info = n_info  # 256
-#
-#         num_directions = 2 if bidirectional else 1
-#         self.rnn_out_dim = hidden_size * num_directions
-#
-#         # RNN layer
-#         rnn_cls = {"GRU": nn.GRU, "LSTM": nn.LSTM, "RNN": nn.RNN}[cell_type]
-#         self.rnn = rnn_cls(
-#             input_size=input_dim,
-#             hidden_size=hidden_size,
-#             batch_first=True,
-#             bidirectional=bidirectional,
-#         )
-#
-#         # Optional BatchNorm1d between GRU and output layer
-#         self.bn = nn.BatchNorm1d(self.rnn_out_dim) if use_batchnorm else None
-#
-#         # Linear maps pooled GRU output -> n_info logits directly
-#         self.output_linear = nn.Linear(self.rnn_out_dim, n_info)
-#
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         """
-#         Args:
-#             x: (batch, N_sym, input_dim) — received signal
-#
-#         Returns:
-#             logits: (batch, K_INFO=256) — logits for all info bits
-#         """
-#         rnn_out, h_n = self.rnn(x)        # h_n: (2, B, H) for bidirectional
-#         # pooled = rnn_out.mean(dim=1)    # (batch, 2H) — mean pooling (disabled)
-#         pooled = h_n.transpose(0, 1).reshape(x.size(0), -1)  # (B, 2H) — final hidden states
-#         return self.output_linear(pooled) # (batch, K_INFO)
+class BiRNNDecoder(nn.Module):
+    """
+    Bidirectional RNN decoder for convolutional codes.
+
+    Per CLAUDE.md:
+      Input:  (batch, 524, 1) — each received BPSK symbol is one time step
+      BiGRU:  h=32/dir -> concat -> (batch, 524, 64)
+      Output: Linear(64,1) at each position -> sigmoid -> 524 probabilities
+      Select: info bit positions 0,2,4,...,510 -> 256 info bit predictions
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 32,
+        input_dim: int = 1,
+        cell_type: str = "GRU",
+        bidirectional: bool = True,
+        use_batchnorm: bool = False,
+        n_info: int = K_INFO,
+    ) -> None:
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.input_dim = input_dim
+        self.cell_type = cell_type
+        self.bidirectional = bidirectional
+        self.use_batchnorm = use_batchnorm
+        self.n_info = n_info  # 256
+
+        num_directions = 2 if bidirectional else 1
+        self.rnn_out_dim = hidden_size * num_directions
+
+        # RNN layer
+        rnn_cls = {"GRU": nn.GRU, "LSTM": nn.LSTM, "RNN": nn.RNN}[cell_type]
+        self.rnn = rnn_cls(
+            input_size=input_dim,
+            hidden_size=hidden_size,
+            batch_first=True,
+            bidirectional=bidirectional,
+        )
+
+        # Optional BatchNorm1d between GRU and output layer
+        self.bn = nn.BatchNorm1d(self.rnn_out_dim) if use_batchnorm else None
+
+        # Linear maps pooled GRU output -> n_info logits directly
+        self.output_linear = nn.Linear(self.rnn_out_dim, n_info)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (batch, N_sym, input_dim) — received signal
+
+        Returns:
+            logits: (batch, K_INFO=256) — logits for all info bits
+        """
+        rnn_out, h_n = self.rnn(x)        # h_n: (2, B, H) for bidirectional
+        # pooled = rnn_out.mean(dim=1)    # (batch, 2H) — mean pooling (disabled)
+        pooled = h_n.transpose(0, 1).reshape(x.size(0), -1)  # (B, 2H) — final hidden states
+        return self.output_linear(pooled) # (batch, K_INFO)
 
 
 # ─────────────────────────────────────────────
 # Model: Attention-based BiGRU Decoder
 # ─────────────────────────────────────────────
-class BiRNNDecoder(nn.Module):
-    """
-    Attention-based Bidirectional GRU decoder.
+# class BiRNNDecoder(nn.Module):
+#     """
+#     Attention-based Bidirectional GRU decoder.
 
-    Architecture:
-      Input:        (B, 524, 1) — raw received signal
-      BiGRU:        -> (B, 524, 64) all hidden states
-      Attention:    learned scalar score per timestep -> softmax weights
-      Context:      weighted sum -> (B, 64)
-      Output:       Linear(64, 256) -> (B, 256) info bit logits
+#     Architecture:
+#       Input:        (B, 524, 1) — raw received signal
+#       BiGRU:        -> (B, 524, 64) all hidden states
+#       Attention:    learned scalar score per timestep -> softmax weights
+#       Context:      weighted sum -> (B, 64)
+#       Output:       Linear(64, 256) -> (B, 256) info bit logits
 
-    The attention vector v scores each timestep independently, letting the
-    model focus on the most informative received symbols.
-    """
+#     The attention vector v scores each timestep independently, letting the
+#     model focus on the most informative received symbols.
+#     """
 
-    def __init__(self, hidden_size: int = 32, n_info: int = K_INFO) -> None:
-        super().__init__()
-        rnn_dim = 2 * hidden_size                          # 64 for h=32
-        self.rnn = nn.GRU(input_size=1, hidden_size=hidden_size,
-                          batch_first=True, bidirectional=True)
-        self.attn_vector = nn.Linear(rnn_dim, 1, bias=False)  # v: scores each timestep
-        self.output_linear = nn.Linear(rnn_dim, n_info)
+#     def __init__(self, hidden_size: int = 32, n_info: int = K_INFO) -> None:
+#         super().__init__()
+#         rnn_dim = 2 * hidden_size                          # 64 for h=32
+#         self.rnn = nn.GRU(input_size=1, hidden_size=hidden_size,
+#                           batch_first=True, bidirectional=True)
+#         self.attn_vector = nn.Linear(rnn_dim, 1, bias=False)  # v: scores each timestep
+#         self.output_linear = nn.Linear(rnn_dim, n_info)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, N_sym, 1) — received signal
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         """
+#         Args:
+#             x: (B, N_sym, 1) — received signal
 
-        Returns:
-            logits: (B, K_INFO=256)
-        """
-        rnn_out, _ = self.rnn(x)               # (B, 524, 64)
-        e = self.attn_vector(rnn_out)           # (B, 524, 1) — attention scores
-        a = torch.softmax(e, dim=1)             # (B, 524, 1) — normalised weights
-        c = (a * rnn_out).sum(dim=1)            # (B, 64)     — weighted context
-        return self.output_linear(c)            # (B, 256)
+#         Returns:
+#             logits: (B, K_INFO=256)
+#         """
+#         rnn_out, _ = self.rnn(x)               # (B, 524, 64)
+#         e = self.attn_vector(rnn_out)           # (B, 524, 1) — attention scores
+#         a = torch.softmax(e, dim=1)             # (B, 524, 1) — normalised weights
+#         c = (a * rnn_out).sum(dim=1)            # (B, 64)     — weighted context
+#         return self.output_linear(c)            # (B, 256)
 
 
 # ─────────────────────────────────────────────

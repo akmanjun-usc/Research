@@ -42,15 +42,18 @@ The goal is **not** to beat polar codes on clean AWGN. The goal is robustness, g
 ```
 project/
 ├── CLAUDE.md
+├── Phase2a_Documentation.md  # [Phase 2a] Full documentation incl. negative result & motivation for 2b
 ├── channel.py          # AWGN + sinusoidal interference simulator
 ├── trellis.py          # Trellis FSM: encode, validate, load standard codes
 ├── decoders.py         # Viterbi (mismatched + oracle), optional C speedup
+├── viterbi_core.c      # C extension for Viterbi inner loop
+├── viterbi_core.so     # Compiled C extension
 ├── interference_est.py # FFT-based interference estimation + cancellation
 ├── baselines.py        # B1, B2, B5 baseline wrappers
 ├── eval.py             # Monte Carlo BLER, SNR/INR sweeps, Phase 1 runner
 ├── compute_cost.py     # FLOPs/latency profiler (applies to ALL methods)
 ├── plot_utils.py       # IEEE-style figures, Paul Tol palette, BLER curves
-├── neural_decoder.py   # [Phase 2a] BiGRUDecoder, training loop, decode fn
+├── neural_decoder.py   # [Phase 2a] BiRNNDecoder (BiGRU, final-hidden-state pooling), training loop, decode fn
 ├── neural_bm.py        # [Phase 2b] Neural branch metric estimator — not yet created
 ├── search.py           # [Phase 3] Evolutionary/SA trellis search — not yet created
 ├── fitness.py          # [Phase 3] Two-tier fitness: cheap proxy + full eval — not yet created
@@ -62,14 +65,14 @@ project/
 │   ├── test_bler_vs_snr_plot.py    # 5-curve BLER comparison (B1/B2, AWGN/interference, theory)
 │   ├── test_neural_ops.py      # [Phase 2a] Verify GRU/LSTM/RNN op count ≤ 2.1M
 │   ├── test_neural_overfit.py  # [Phase 2a] Overfit on 1 batch to verify learning works
-│   └── test_neural_vs_b1.py    # [Phase 2a] N1 must beat B1 by ≥0.5 dB
+│   ├── test_neural_vs_b1.py    # [Phase 2a] N1 must beat B1 by ≥0.5 dB
+│   └── test_overfit_gru_batch.py   # [Phase 2a] Single-batch GRU overfit sanity check
 └── results/
     ├── phase1/         # Phase 1 eval: .npz data, compute_table.md
     │   └── figures/    # phase1_bler_vs_snr.pdf, phase1_bler_vs_inr.pdf
-    ├── phase2a/        # Phase 2a eval: model checkpoints, training curves, BLER data
-    │   ├── checkpoints/  # best_gru.pt, best_lstm.pt, best_rnn.pt
-    │   ├── figures/      # phase2a_bler_vs_snr.pdf, phase2a_bler_vs_inr.pdf, training_loss.pdf
-    │   └── logs/         # training_log.json (loss, val_bler per epoch)
+    ├── phase2a/        # Phase 2a eval: model checkpoints (empty — training failed), logs
+    │   ├── checkpoints/  # Empty — no successful model saved
+    │   └── logs/         # Training logs (if any runs completed)
     └── test/           # Test-generated plots
 ```
 
@@ -180,139 +183,64 @@ def measure_latency(model_or_fn, sample_input, n_runs=1000) -> float: ...  # ms 
 
 ---
 
-### Phase 2 — Neural Decoder Baselines (Target: ~2–4 weeks)
+### Phase 2 — Neural Decoder Baselines
 **Goal:** Validate that learned decoding improves robustness under sinusoidal interference.
 
 **Sub-phases:**
-#### 2a — GRU End-to-End Decoder (N1)
+#### 2a — GRU End-to-End Decoder (N1) ✅ COMPLETE — **Negative Result**
 
-**Architecture (Bidirectional GRU)**
+**Outcome:** The BiGRU end-to-end decoder cannot learn to decode the rate-1/2 K=7 convolutional code. After extensive experimentation (mean pooling, final-hidden-state pooling, attention pooling, curriculum training, high-SNR training at 15–20 dB), the model plateaued at ~53% bit accuracy. Random guessing is 50%. BLER remained at 1.0 throughout. None of the success criteria were met.
 
-The decoder replaces the entire Viterbi algorithm. It takes the raw received signal and outputs bit probability estimates directly.
+**Full documentation:** `Phase2a_Documentation.md`
+
+**Architecture implemented (`neural_decoder.py`):**
 
 | Layer | Detail |
 |-------|--------|
-| Input | r[t] at each of N=524 time steps (512 from info bits + 12 from tail bits). Input dim = 1 (optionally 2 if appending normalized time index t/N) |
-| RNN | Bidirectional GRU, h=32 hidden units per direction. Forward GRU reads t=0..523, backward GRU reads t=523..0. Separate learned weights per direction. |
-| Concatenation | At each position t: c[t] = [h_forward[t]; h_backward[t]], dim = 64 |
-| Batch norm | Optional BatchNorm1d between GRU and output layer for training stability |
-| Output | Shared linear layer W_out (1 x 64) + bias, applied at each of N=524 positions, followed by sigmoid. Produces 524 probabilities. |
-| Bit selection | Select 256 outputs corresponding to info bit positions (defined by trellis mapping). Discard the other 268 (256 parity + 12 termination). Tail bit positions are known (zero-forced) and excluded from loss. |
+| Input | (batch, 524, 1) — raw received signal |
+| BiGRU | h=32/dir → all hidden states (batch, 524, 64) |
+| Pooling | Final hidden states: h_n.transpose(0,1).reshape(B, 64) |
+| Output | Linear(64, 256) → (batch, 256) info bit logits |
 
-**RNN Cell Variants to Compare**
+**Pooling strategies tried and failed:**
 
-Run all three at matched compute budgets and report in paper:
+| Strategy | Best bit accuracy | Notes |
+|----------|------------------|-------|
+| Mean pooling | ~52.1% | Uniform weighting over 524 steps |
+| Final hidden states | ~53.5% | Current active version in `neural_decoder.py` |
+| Attention pooling | ~53.8% | Learnable per-timestep weights; marginal gain |
 
-| Variant | Hidden per direction | Approx ops | Purpose |
-|---------|---------------------|------------|---------|
-| Bidirectional GRU | 32 | ~3.2M (needs trimming, see note) | Primary candidate. GRU converges faster, fewer params than LSTM. |
-| Bidirectional LSTM | 26 | ~3.2M | Compare. LSTM has separate cell state for tracking periodicity. 33% more ops per unit so smaller hidden size at same budget. |
-| Bidirectional vanilla RNN | 32 | ~2.1M | Sanity check. Expected to fail on length-524 sequences due to vanishing gradients. |
+All variants: BLER = 1.0 (no block ever decoded correctly).
 
-**Compute Budget Note:** Bidirectional GRU with h=32 gives ~3.3M ops (at N=524), exceeding the 2.1M budget. Options to resolve: (a) reduce to h=26 per direction (~2.1M ops), (b) process in temporal chunks of length 128 with overlap, (c) use unidirectional GRU h=40 (~2.0M ops) and accept loss of future context. Run op counter via `thop` to find the exact hidden size that hits 2.1M at sequence length N=524. Report final architecture choice with measured op count. Note: N=524 (not 512) due to 12 termination coded bits — ops scale linearly with sequence length.
+**Conclusion:** End-to-end decoding of a convolutional code requires the model to learn an implicit Viterbi search over 64 states × 524 time steps — a combinatorially hard mapping that a ~23K-parameter BiGRU cannot represent. The architecture is insufficient for this task. See `Phase2a_Documentation.md` §13 for full analysis.
 
-**GRU Equations (per direction, per time step)**
-
-```
-Reset gate:     r_t = sigmoid( W_r . [h_{t-1}, input_t] + b_r )
-Update gate:    z_t = sigmoid( W_z . [h_{t-1}, input_t] + b_z )
-Candidate:      h_tilde = tanh( W . [r_t * h_{t-1}, input_t] + b )
-New state:      h_t = (1 - z_t) * h_{t-1} + z_t * h_tilde
-```
-
-Where `*` is element-wise multiplication, `[,]` is concatenation, sigmoid squashes to [0,1], tanh squashes to [-1,+1].
-
-**Output Layer Math**
-
-At each position t, the concatenated hidden state c[t] (64 dims) maps to one probability:
-```
-p[t] = sigmoid( W_out . c[t] + b_out )
-```
-W_out is 1x64, b_out is scalar. Same weights shared across all N=524 positions (weight sharing).
-
-Final output: select the 256 positions corresponding to info bits (positions 0, 2, 4, ..., 510 for rate-1/2 trellis, or whatever mapping trellis.py defines). The final 12 positions (indices 512–523) correspond to tail bit encoding and are excluded — the tail bits are known zeros used only for trellis termination.
-
-**Parameter Count**
-
-Per GRU direction (h=32, input=1): 3 gates x (32x33 + 32) = 3264 params. Two directions = 6528. Output layer = 65. Total ~ 6593 trainable parameters.
-
-**Loss Function**
-
-Binary cross-entropy (BCE), averaged over K=256 info bits per block:
-```
-L = -(1/K) * sum_{k=0}^{K-1} [ b[k]*log(p[k]) + (1-b[k])*log(1-p[k]) ]
-```
-Where b[k] is the true info bit, p[k] is the predicted probability. BCE is smooth and differentiable (required for gradient-based training). Confident wrong predictions are penalized exponentially harder than uncertain ones.
-
-**Optimizer**
-
-Adam optimizer with the following schedule:
-- Initial learning rate: 1e-3
-- Reduce to 1e-4 after 50 epochs (or use ReduceLROnPlateau with patience=10)
-- Gradient clipping: clip_norm=1.0 to prevent exploding gradients
-- Batch size: 128 blocks per batch (tune based on GPU memory)
-
-**Training Data Generation (on-the-fly, no pre-generated dataset)**
-
-Each mini-batch generates fresh random data using existing channel.py and trellis.py:
-1. Sample K=256 random info bits
-2. Encode through trellis (trellis.py) to get N=524 coded bits (256 info bits + 6 tail bits, each producing 2 coded bits)
-3. BPSK modulate: x[t] = 2*c[t] - 1
-4. Sample channel params uniformly per block:
-   - SNR ~ Uniform(0, 10) dB
-   - INR ~ Uniform(-5, 10) dB (note: training INR upper bound is 10, not 15, to test generalization at 10-15 dB)
-   - P ~ Uniform(8, 32) (integer or continuous, experiment with both)
-   - φ ~ Uniform(0, 2π)
-5. Generate noise + interference via channel.py
-6. Received signal r[t] = x[t] + n[t] + i[t], shape (batch_size, 524, 1)
-
-**Evaluation Metric**
-
-Primary: Block Error Rate (BLER). A block is in error if ANY of the 256 decoded bits differs from the true info bits.
-```
-BLER = (blocks with ≥1 bit error) / (total blocks tested)
-```
-BLER is NOT used for training (not differentiable). It is computed during evaluation only.
-
-Secondary (for debugging): Bit Error Rate (BER) = total wrong bits / total bits.
-
-Evaluation uses 100,000 Monte Carlo blocks per (SNR, INR) point.
-
-**Training Procedure**
-
-1. Epoch = 10,000 batches of 128 blocks = 1.28M training blocks per epoch
-2. Train for 100 epochs (total ~128M blocks seen)
-3. Validate every epoch on held-out set: 10,000 blocks at (SNR=5dB, INR=5dB)
-4. Save best model checkpoint (lowest validation BLER)
-5. Early stopping: if validation BLER does not improve for 20 epochs, stop
-
-**Implementation Tasks**
-
-- [ ] `neural_decoder.py`: Define `BiGRUDecoder(nn.Module)` with configurable hidden_size, cell_type (GRU/LSTM/RNN), bidirectional flag, input_dim
-- [ ] `neural_decoder.py`: Define `training_step(model, batch) -> loss` and `decode(model, received_signal) -> bit_estimates`
-- [ ] `neural_decoder.py`: Define `train_loop(model, config, trellis, channel_fn) -> trained_model` with on-the-fly data generation
-- [ ] Verify op count with `compute_cost.py` using `thop.profile()`. Adjust hidden_size until ops ≤ 2.1M
-- [ ] Train GRU, LSTM, and vanilla RNN variants. Compare BLER curves.
-- [ ] Evaluate: BLER vs SNR sweep at INR=5dB, BLER vs INR sweep at SNR=5dB
-- [ ] Generalization test: evaluate at INR=12dB and INR=15dB (outside training range of [-5,10])
-- [ ] Generalization test: evaluate at P=4 and P=48 (outside training range of [8,32])
-- [ ] Compare N1 vs B1 (mismatched Viterbi) and B5 (IC+Viterbi). N1 must beat B1 by ≥0.5 dB at BLER=10⁻³.
-- [ ] Save trained model weights, training curves (loss vs epoch), and all eval results to `results/phase2a/`
+**Implementation tasks completed:**
+- [x] `neural_decoder.py`: `BiRNNDecoder(nn.Module)` with configurable hidden_size, cell_type, bidirectional, use_batchnorm
+- [x] `neural_decoder.py`: `train_model(config, seed, model)` with on-the-fly batch generation, early stopping, checkpointing
+- [x] `neural_decoder.py`: `make_decoder_n1(model, device)` inference wrapper compatible with eval.py
+- [x] `neural_decoder.py`: `load_model(checkpoint_path)`, `build_codeword_pool()`, `validate_bler()`
+- [x] Tests: `test_neural_ops.py`, `test_neural_overfit.py`, `test_neural_vs_b1.py`, `test_overfit_gru_batch.py`
+- [x] Three pooling strategies implemented and benchmarked
+- [x] Curriculum training attempted (high SNR → low SNR)
 
 **Key References**
 
 - Gruber et al., "On Deep Learning-Based Channel Decoding" (2017) — foundational RNN decoder for conv codes
-- Jiang et al., "LEARN Codes: Inventing Low-Latency Codes via RNNs" (2019, IEEE TCOM) — GRU encoder/decoder co-design, robustness under channel mismatch
-- Kim et al., "Communication Algorithms via Deep Learning" (2018) — Bi-GRU decoder with BatchNorm, deepcomm.github.io reference implementation
-- IEEE ICC 2024, "Deep Learning Based Decoder for Concatenated Coding over Deletion Channels" — Bi-GRU as LLR estimator, single network across channel params
+- Jiang et al., "LEARN Codes: Inventing Low-Latency Codes via RNNs" (2019, IEEE TCOM)
+- Kim et al., "Communication Algorithms via Deep Learning" (2018) — Bi-GRU decoder with BatchNorm
 
-#### 2b — Neural Branch Metric Estimator (N2) *(Professor addition — ideation phase)*
+#### 2b — Neural Branch Metric Estimator (N2) ← **ACTIVE NEXT PHASE**
+
+**Motivation (from Phase 2a negative result):** End-to-end decoding failed because a small BiGRU cannot implicitly learn Viterbi over 64 states. Solution: keep the Viterbi/BCJR graph structure intact and replace only the branch metric computation with a small neural network. The NN needs to learn only a scalar log-likelihood proxy per branch per time step — a much simpler mapping than end-to-end decoding.
+
+**Concept:** Replace γ(s→s', y_t) in the Viterbi ACS operation with a learned NN output. The DP structure handles global search; the NN handles local channel estimation.
+
 - [ ] Design NN architecture for branch metric estimation (see design notes above)
 - [ ] Integrate with existing Viterbi/BCJR graph structure in `decoders.py`
-- [ ] Verify op count matches budget
-- [ ] Compare N2 vs N1 vs B1 — is structured hybrid better than end-to-end?
+- [ ] Verify op count matches 2.1M budget
+- [ ] Compare N2 vs B1 (mismatched Viterbi) and B5 (IC+Viterbi)
 
-**Deliverable:** BLER curves + compute table for N1, N2, B1, B2, B5. Evidence of robustness to distribution shift.
+**Deliverable:** BLER curves + compute table for N2, B1, B2, B5. Evidence of robustness to distribution shift.
 
 ---
 
@@ -377,7 +305,8 @@ Evaluation uses 100,000 Monte Carlo blocks per (SNR, INR) point.
 | Phase | Criterion |
 |-------|-----------|
 | Phase 1 | Validation tests pass; baseline BLER curves match theory |
-| Phase 2 | N1 beats B1 by ≥0.5 dB at BLER=10⁻³; training stable |
+| Phase 2a | ~~N1 beats B1 by ≥0.5 dB~~ — **negative result**: BiGRU end-to-end cannot decode K=7 code; pivoting to N2 (neural branch metric) |
+| Phase 2b | N2 beats B1 by ≥0.5 dB at BLER=10⁻³; N2 shows robustness under distribution shift |
 | Phase 3 | Searched trellis beats random (B3) by ≥1 dB; search shows fitness improvement over generations |
 | Phase 4 | S1 beats B1 at equal 2.1M op budget; all ablations complete; compute costs reported for every method |
 
