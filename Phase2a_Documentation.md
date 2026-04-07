@@ -2,7 +2,7 @@
 
 **Project:** EE597 Search-Designed Trellis Codes with Neural Decoding  
 **Author:** Abhishek Manjunath  
-**Phase status:** Implementation complete; training not yet run  
+**Phase status:** Training experiments complete — **negative result** (architecture cannot learn end-to-end decoding)  
 **Primary file:** `neural_decoder.py`
 
 ---
@@ -18,11 +18,13 @@
 7. [Compute Budget Analysis](#7-compute-budget-analysis)
 8. [Assumptions](#8-assumptions)
 9. [Tests](#9-tests)
-10. [Output Artifacts](#10-output-artifacts)
-11. [Success Criteria](#11-success-criteria)
-12. [Generalization Tests (Post-Training)](#12-generalization-tests-post-training)
-13. [Key References](#13-key-references)
-14. [Implementation Checklist](#14-implementation-checklist)
+10. [Experimental Results](#10-experimental-results)
+11. [Output Artifacts](#11-output-artifacts)
+12. [Success Criteria](#12-success-criteria)
+13. [Phase 2a Conclusion and Motivation for Phase 2b](#13-phase-2a-conclusion-and-motivation-for-phase-2b)
+14. [Generalization Tests (Post-Training)](#14-generalization-tests-post-training)
+15. [Key References](#15-key-references)
+16. [Implementation Checklist](#16-implementation-checklist)
 
 ---
 
@@ -33,8 +35,14 @@ Phase 2a implements **N1: the Bidirectional GRU End-to-End Decoder**, which repl
 **What N1 must achieve:**
 - Beat B1 (Mismatched Viterbi) by **≥ 0.5 dB at BLER = 10⁻³**
 - Operate within the **2.1M operation budget**
-- Show **stable training** (monotically decreasing validation BLER)
+- Show **stable training** (monotonically decreasing validation BLER)
 - Generalize to **channel parameters outside training distribution**
+
+### 1.1 Phase 2a Outcome Summary
+
+**Result: Negative.** The BiGRU end-to-end decoder cannot learn to decode the rate 1/2 K=7 convolutional code. After extensive experimentation — including curriculum training, multiple pooling strategies (mean pooling, attention pooling), and training at very high SNR (15–20 dB) with near-zero interference — the model plateaued at ~53% bit accuracy. Random guessing is 50%. BLER remained at 1.0 throughout all experiments. None of the success criteria were met.
+
+This negative result provides strong motivation for Phase 2b, where the same BiGRU architecture is repurposed for branch metric estimation rather than end-to-end decoding. The Viterbi algorithm handles the global trellis search; the GRU handles local channel estimation.
 
 ---
 
@@ -89,7 +97,7 @@ Pool:    Mean over time dimension → (batch, 64)
 Output:  Linear(64, 256) → (batch, 256) info bit logits
 ```
 
-**Mean-pooling design:** Rather than selecting specific coded positions, the GRU output is averaged over all 524 time steps to produce a single 64-dim context vector. A `Linear(64, 256)` layer then maps this directly to 256 info bit logits. This gives the model a global view of the entire sequence and provides cleaner gradient flow compared to the previous per-timestep approach.
+**Mean-pooling design (baseline):** Rather than selecting specific coded positions, the GRU output is averaged over all 524 time steps to produce a single 64-dim context vector. A `Linear(64, 256)` layer then maps this directly to 256 info bit logits. An **attention pooling** variant was also tested, which learns a per-timestep importance weight instead of uniform averaging. See §3.3 for details on all pooling strategies and their results.
 
 ### 3.2 GRU Cell Equations (per direction, per time step)
 
@@ -102,16 +110,53 @@ New state:      h_t = (1 − z_t) ⊙ h_{t-1} + z_t ⊙ h̃_t
 
 Where `⊙` is element-wise multiplication and `[·, ·]` is concatenation.
 
-### 3.3 Output Layer
+### 3.3 Output Layer and Pooling Strategies
 
-The GRU output is mean-pooled over the time dimension to produce a single context vector `c` (64 dims), which is then mapped to all 256 info bit logits:
+The GRU produces a per-timestep output of shape `(batch, 524, 2H)`. This must be reduced to `(batch, 256)` info bit logits. Three pooling strategies were implemented and tested.
+
+#### 3.3.1 Mean Pooling (baseline)
+
+The GRU output is averaged over all 524 timesteps to produce a single context vector `c` (64 dims), which is then mapped to all 256 info bit logits:
 
 ```
 c = (1/N) Σ_{t=0}^{N-1} rnn_out[t]     # mean-pool: (batch, 64)
 logits = W_out · c + b_out              # Linear(64, 256): (batch, 256)
 ```
 
-`W_out` is shape `(256, 64)` — one row per info bit.
+`W_out` is shape `(256, 64)` — one row per info bit. Every timestep contributes equally. This is the weakest strategy because some timesteps carry more decoding information than others, and the uniform weighting dilutes the signal.
+
+**Result:** Plateaued at 53.1% bit accuracy after 200 epochs at SNR 15–20 dB. See §10.
+
+#### 3.3.2 Attention Pooling
+
+Instead of uniform averaging, attention pooling learns a weight per timestep. The model decides which timesteps are most important for decoding.
+
+A learned parameter vector `v` of size 2H acts as a query. For each timestep `t`, a relevance score is computed:
+
+```
+e_t = v · h_t                           # dot product: scalar per timestep
+a_t = exp(e_t) / Σ_j exp(e_j)          # softmax: normalized weights summing to 1
+c = Σ_t a_t · h_t                       # weighted sum: (batch, 2H)
+logits = W_out · c + b_out              # Linear(2H, 256): (batch, 256)
+```
+
+The vector `v` is initialized randomly and updated by gradient descent during training, just like all other network weights. After training, `v` points in the direction of the 2H-dimensional GRU output space that best separates important timesteps from unimportant ones. Timesteps whose GRU outputs align with `v` receive high attention weights; those pointing away receive low weights.
+
+This adds only 64 new parameters (the vector `v`), bringing the total to 23,424.
+
+**Result:** Plateaued at 53.8% bit accuracy after 200 epochs at SNR 15–20 dB. Marginal improvement over mean pooling. See §10.
+
+#### 3.3.3 Final Hidden States (not tested)
+
+A BiGRU inherently produces a sequence summary in its final hidden states. The forward direction's final state summarizes left-to-right context; the backward direction's final state summarizes right-to-left context. Concatenating both gives a (2H)-dim vector without any pooling.
+
+```
+rnn_out, h_n = self.rnn(x)              # h_n: (2, batch, H) for bidirectional
+c = h_n.transpose(0,1).reshape(B, 2H)   # (batch, 2H)
+logits = W_out · c + b_out              # Linear(2H, 256): (batch, 256)
+```
+
+This was identified as an alternative but not tested, as the attention pooling results already indicated the bottleneck was in the GRU's representation capacity, not the pooling method.
 
 ### 3.4 Parameter Count (h=32, input_dim=1, bidirectional)
 
@@ -171,7 +216,7 @@ class TrainConfig:
     pool_size: int = 50000         # pre-encoded codeword pool size
 
     # ── Validation ────────────────────────────
-    val_blocks: int = 10000        # blocks for validation BLER
+    val_blocks: int = 10000        # blocks for validation
     val_snr_db: float = 5.0        # fixed validation SNR
     val_inr_db: float = 5.0        # fixed validation INR
     patience: int = 20             # early stopping patience
@@ -191,6 +236,54 @@ class TrainConfig:
 - `inr_range` upper bound is **10 dB** during training (not 15 dB). This deliberately leaves out 10–15 dB to test **out-of-distribution generalization**.
 - `pool_size = 50000` pre-encoded codewords for efficiency — avoids re-encoding on every batch.
 - `batches_per_epoch = 1000` (reduced from the 10,000 in CLAUDE.md spec due to pool-based approach), giving 1000 × 128 = 128,000 training blocks per epoch.
+
+### 4.1 Validation Configuration — Lessons Learned
+
+**Critical lesson: validation SNR/INR must match training SNR/INR.**
+
+The original default configuration validated at SNR=5 dB and INR=5 dB regardless of training conditions. When training at SNR=10 dB and INR=0 dB, this meant the model was being evaluated on a harder channel than it had ever seen during training. BLER stayed at 1.0 and gave no useful signal about whether the model was learning.
+
+The fix: set `val_snr_db` and `val_inr_db` to the midpoint of the training range. When training over a range (e.g., SNR 0–10 dB), validate at the midpoint (SNR=5 dB). When training at a fixed point (e.g., SNR 15–20 dB), validate at the midpoint of that range (SNR=17.5 dB).
+
+**Checkpointing metric: bit accuracy, not BLER.** BLER is binary — a block is either perfect or has errors. When the model is early in training at ~52% bit accuracy, every block has errors and BLER is stuck at 1.0. Bit accuracy is continuous and captures incremental progress. Checkpointing was changed to save on best validation bit accuracy.
+
+### 4.2 Curriculum Training Configurations
+
+Curriculum training starts with easy channel conditions and gradually increases difficulty. Three stages were defined:
+
+```python
+# Stage 1: Easy. High SNR, minimal interference.
+config_stage1 = TrainConfig(
+    snr_range=(15.0, 20.0),
+    inr_range=(-5.0, -2.5),
+    val_snr_db=17.5,
+    val_inr_db=-3.75,
+    n_epochs=200,
+    patience=200,
+)
+
+# Stage 2: Medium. Widen both ranges.
+config_stage2 = TrainConfig(
+    snr_range=(4.0, 10.0),
+    inr_range=(-5.0, 7.5),
+    val_snr_db=7.0,
+    val_inr_db=1.25,
+    n_epochs=50,
+    patience=50,
+)
+
+# Stage 3: Full range.
+config_stage3 = TrainConfig(
+    snr_range=(0.0, 10.0),
+    inr_range=(-5.0, 15.0),
+    val_snr_db=5.0,
+    val_inr_db=5.0,
+    n_epochs=100,
+    patience=100,
+)
+```
+
+**Note:** `train_model` was modified to accept an optional pretrained model parameter so that each stage resumes from the previous stage's checkpoint rather than initializing a fresh model. Stage 2 was attempted but the model had not learned enough in Stage 1 to benefit from curriculum progression. See §10 for details.
 
 ---
 
@@ -228,17 +321,23 @@ Training uses **on-the-fly channel randomization** with **pre-encoded codeword p
 ### 5.2 Validation Protocol
 
 Every epoch:
-- Evaluate BLER on `val_blocks = 10,000` blocks
-- Fixed point: `SNR = 5 dB`, `INR = 5 dB`
+- Evaluate bit accuracy and BLER on `val_blocks = 10,000` blocks
+- Fixed point: validation SNR/INR set to **midpoint of training range** (see §4.1)
 - Period P and phase φ are re-randomized (P ∈ [8,32])
-- Metric: BLER = (blocks with ≥1 bit error) / total blocks
+- Metrics:
+  - Bit accuracy = (correctly decoded bits) / (total bits across all blocks)
+  - BLER = (blocks with ≥1 bit error) / total blocks
 - Prediction: `bit = (sigmoid(logit) > 0.5)`
 
-**Early stopping:** If validation BLER does not improve for `patience=20` consecutive epochs, training halts.
+**Early stopping:** If validation bit accuracy does not improve for `patience` consecutive epochs, training halts.
+
+> **Lesson learned:** The original implementation validated at fixed SNR=5 dB / INR=5 dB regardless of training distribution. This caused BLER to remain at 1.0 when training at higher SNR, providing no useful training signal. Validation conditions must match training conditions.
 
 ### 5.3 Checkpointing
 
-Checkpoint saved whenever validation BLER improves. Saved to `results/phase2a/checkpoints/best_{cell_type}.pt`.
+Checkpoint saved whenever **validation bit accuracy** improves. Saved to `results/phase2a/checkpoints/best_{cell_type}.pt`.
+
+> **Lesson learned:** The original implementation checkpointed on best validation BLER. When the model is early in training at ~52% bit accuracy, every block has errors and BLER is stuck at 1.0. The first epoch always becomes the "best" checkpoint, and no subsequent improvements are captured. Bit accuracy is a continuous metric that captures incremental progress and is the correct metric for checkpointing during training.
 
 Checkpoint contains:
 ```python
@@ -246,6 +345,7 @@ Checkpoint contains:
     'model_state_dict': model.state_dict(),
     'config': asdict(config),       # full TrainConfig
     'epoch': epoch,
+    'val_bit_acc': val_bit_acc,
     'val_bler': val_bler,
     'loss': avg_loss,
 }
@@ -367,7 +467,7 @@ The test `test_neural_ops.py::TestAnalyticalOps::test_bigru_h32_ops` documents t
 
 1. **Input is scalar:** Each time step receives a single float `r[t]` (the raw received BPSK+noise+interference sample). There is no explicit time index or channel state provided as input — the model must infer all information from the received sequence alone.
 
-2. **Mean-pooled output:** The GRU output is averaged over all 524 time steps (`rnn_out.mean(dim=1)`) to produce a fixed-length 64-dim context vector, which is then projected to 256 info bit logits via `Linear(64, 256)`. There is no explicit mapping between coded positions and info bit positions — the model learns this mapping implicitly.
+2. **Pooling-based output:** The GRU output is reduced from 524 timesteps to a fixed-length context vector via pooling (mean or attention), then projected to 256 info bit logits via `Linear(2H, 256)`. There is no explicit mapping between coded positions and info bit positions — the model learns this mapping implicitly. Both mean pooling and attention pooling were tested; see §3.3.
 
 3. **Tail bits handled implicitly:** The 12 coded bits at positions 512–523 (from tail bits) contribute to the mean pool and thus the global context, but there is no explicit exclusion — the model sees all 524 time steps equally.
 
@@ -481,40 +581,128 @@ pytest tests/test_neural_vs_b1.py -v -m slow
 
 ---
 
-## 10. Output Artifacts
+## 10. Experimental Results
+
+### 10.1 Summary of Experiments
+
+| Experiment | Pooling | SNR (dB) | INR (dB) | Epochs | Best bit_acc | BLER | Notes |
+|-----------|---------|----------|----------|--------|-------------|------|-------|
+| Exp 1 | Mean | 0–10 (train range) | 0 (fixed) | 200 | ~53.1% | 1.0 | Original config; val at mismatched SNR=5/INR=5 initially |
+| Exp 2 | Mean | 15–20 (easy) | −5 to −2.5 | 200 | 53.1% | 1.0 | Curriculum Stage 1; validation matched to training |
+| Exp 3 | Mean | 4–10 (curriculum Stage 2) | −5 to 7.5 | ~20 | ~50.3% | 1.0 | Resumed from Exp 2; model had not learned enough to transfer |
+| Exp 4 | Attention | 15–20 (easy) | −5 to −2.5 | 200 | 53.8% | 1.0 | Attention pooling; marginal improvement over mean |
+
+### 10.2 Detailed Training Logs
+
+**Experiment 2 — Mean pooling, SNR 15–20 dB, 200 epochs (definitive run):**
+
+```
+Epoch   0 | loss=0.6932 | bit_acc=0.5011 | val_bit_acc=0.5010
+Epoch  50 | loss=0.6673 | bit_acc=0.5265 | val_bit_acc=0.5267   (LR drop to 1e-4)
+Epoch 100 | loss=0.6650 | bit_acc=0.5296 | val_bit_acc=0.5298   (LR drop to 1e-5)
+Epoch 150 | loss=0.6643 | bit_acc=0.5305 | val_bit_acc=0.5308   (LR drop to 1e-6)
+Epoch 195 | loss=0.6643 | bit_acc=0.5308 | val_bit_acc=0.5309
+Final best: val_bit_acc = 0.5310 (epoch 180)
+```
+
+The model plateaued around epoch 50–60 and made negligible progress after that despite three learning rate reductions. The loss converged to 0.6643, well above the theoretical minimum.
+
+**Experiment 4 — Attention pooling, SNR 15–20 dB, 200 epochs:**
+
+```
+Epoch   0 | loss=0.6932 | bit_acc=0.5011 | val_bit_acc=0.5014
+Epoch  50 | loss=0.6649 | bit_acc=0.5313 | val_bit_acc=0.5313
+Epoch 100 | loss=0.6656 | bit_acc=0.5269 | val_bit_acc=0.5266   (regression)
+Epoch 150 | loss=0.6567 | bit_acc=0.5355 | val_bit_acc=0.5355
+Epoch 190 | loss=0.6556 | bit_acc=0.5368 | val_bit_acc=0.5372
+Final best: val_bit_acc = 0.5384 (epoch 198)
+```
+
+Attention pooling showed slightly more learning capacity (53.8% vs 53.1%) but also exhibited instability — bit accuracy regressed around epoch 60–100 before recovering. The improvement over mean pooling is marginal and both remain far from useful decoding performance.
+
+### 10.3 Analysis
+
+**Initial loss of 0.6932 ≈ ln(2) = 0.6931.** This is the loss of a binary classifier that outputs 0.5 for every bit. The model starts at random guessing and barely moves from there.
+
+**The bottleneck is the architecture, not the training method.** Evidence:
+1. Mean pooling at 20 dB SNR: 53.1%. The signal is nearly clean, yet the model cannot learn.
+2. Attention pooling at 20 dB SNR: 53.8%. A better pooling method barely helps.
+3. Curriculum training from easy to hard: Stage 2 could not build on Stage 1 because Stage 1 had not learned enough.
+4. The overfit test passes (100% accuracy on 4 blocks). The model has enough capacity to memorize a tiny batch, but cannot generalize to the full decoding problem.
+
+**Why the architecture fails:** The model must compress 524 received symbols into a 64-dimensional vector (via pooling or hidden states) and then expand that to 256 independent bit decisions. This is a massive information bottleneck. A rate 1/2 K=7 convolutional code has complex dependencies across the entire codeword — the Viterbi algorithm exploits these dependencies through a 64-state trellis search over 262 time steps. The GRU has no mechanism to perform this structured search; it must learn it implicitly from data, which requires far more capacity than h=32 provides.
+
+### 10.4 Debugging Journey
+
+The following issues were identified and fixed during the debugging process:
+
+1. **Critical architecture bug (fixed before experiments above):** The original `forward()` method selected every-other timestep from the GRU's per-timestep output (positions 0, 2, 4, ..., 510) and treated them as info bit predictions. This assumed a correspondence between timestep index and bit index that the GRU had no way to learn. Fixed by switching to mean-pool → Linear(64, 256).
+
+2. **Validation SNR/INR mismatch (fixed):** Validation was hardcoded to SNR=5 dB / INR=5 dB while training at different conditions. BLER was stuck at 1.0, giving no training signal. Fixed by matching validation to training distribution midpoint.
+
+3. **Checkpointing on BLER (fixed):** BLER stayed at 1.0 for the entire training run, so the first epoch was always the "best" checkpoint. Fixed by checkpointing on validation bit accuracy.
+
+---
+
+## 11. Output Artifacts
 
 All saved to `results/phase2a/`:
 
 ```
 results/phase2a/
 ├── checkpoints/
-│   ├── best_gru.pt      # Best GRU model (lowest val BLER)
-│   ├── best_lstm.pt     # Best LSTM model
-│   └── best_rnn.pt      # Best vanilla RNN model
+│   └── best_gru.pt      # Best GRU model (highest val bit_acc)
 ├── figures/
-│   ├── phase2a_bler_vs_snr.pdf   # BLER vs SNR at INR=5dB: N1, B1, B2, B5
-│   ├── phase2a_bler_vs_inr.pdf   # BLER vs INR at SNR=5dB: N1, B1, B2, B5
-│   └── training_loss.pdf         # BCE loss + val BLER vs epoch
+│   └── training_loss.pdf         # BCE loss + val bit_acc vs epoch
 └── logs/
-    └── training_gru_h32.json     # Per-epoch: loss, val_bler, lr, time_s
+    └── training_gru_h32.json     # Per-epoch: loss, bit_acc, val_bit_acc, val_bler, lr, time_s
 ```
+
+> **Note:** LSTM and vanilla RNN variants were not trained, as the GRU (the most capable of the three for sequence tasks) already demonstrated that the end-to-end approach is fundamentally limited at this architecture scale. BLER vs SNR/INR sweep plots were not generated because the model never achieved meaningful decoding performance.
 
 ---
 
-## 11. Success Criteria
+## 12. Success Criteria
 
 From CLAUDE.md:
 
-| Criterion | Threshold |
-|-----------|-----------|
-| N1 vs B1 at BLER = 10⁻³ | **N1 must beat B1 by ≥ 0.5 dB** |
-| Training stability | Val BLER decreases monotonically (or is not worse) across epochs |
-| Compute budget | Final architecture ops ≤ 2.1M per block |
-| Overfit test | Model can memorize 4 training blocks (loss < 0.05, accuracy ≥ 95%) |
+| Criterion | Threshold | Result | Status |
+|-----------|-----------|--------|--------|
+| N1 vs B1 at BLER = 10⁻³ | N1 must beat B1 by ≥ 0.5 dB | BLER = 1.0 at all conditions | **NOT MET** |
+| Training stability | Val BLER decreases monotonically | BLER stuck at 1.0; bit_acc improved but plateaued at ~53% | **NOT MET** |
+| Compute budget | Final architecture ops ≤ 2.1M per block | h=32 gives ~6.6M ops (3× over budget) | **NOT MET** |
+| Overfit test | Model can memorize 4 training blocks | loss 0.003, 100% accuracy | **MET** |
+
+**Conclusion:** The only criterion met was the overfit sanity check, which confirms the model has enough capacity to memorize a tiny batch. All performance criteria were not met. The end-to-end BiGRU approach is not viable for this decoding task at this architecture scale.
 
 ---
 
-## 12. Generalization Tests (Post-Training)
+## 13. Phase 2a Conclusion and Motivation for Phase 2b
+
+### 13.1 Why End-to-End Decoding Failed
+
+The BiGRU end-to-end decoder failed because the task requires the model to simultaneously solve two problems that are fundamentally different in nature:
+
+1. **Local estimation:** Extracting useful information from each noisy received symbol, accounting for AWGN and sinusoidal interference with unknown parameters.
+
+2. **Global search:** Finding the most likely path through a 64-state trellis over 262 time steps, respecting the constraint structure of the convolutional code.
+
+The Viterbi algorithm solves problem (2) exactly and efficiently using dynamic programming. The BiGRU was asked to learn both problems implicitly from data. With h=32 (64 dims after bidirectional concatenation), the model does not have enough representational capacity to learn the trellis structure. The gradient signal is too diffuse — when a single bit prediction is wrong, backpropagation must determine whether the error was in the GRU's sequence processing (problem 1) or in the output mapping (problem 2), across 524 timesteps and through a mean-pool bottleneck.
+
+### 13.2 Motivation for Phase 2b
+
+Phase 2b uses the **same BiGRU architecture** but repurposes it for **branch metric estimation** instead of end-to-end decoding. The division of labor becomes:
+
+- **BiGRU:** Estimates branch metrics at each trellis section, producing per-timestep outputs that account for interference and noise. This is a local estimation task (problem 1 only).
+- **Viterbi algorithm:** Takes the GRU's branch metrics and performs the global trellis search (problem 2).
+
+This decomposition plays to each component's strengths. The GRU handles the part that is hard to model analytically (unknown interference parameters). The Viterbi algorithm handles the part that is well-understood and solved exactly (trellis search).
+
+The Phase 2a negative result makes this comparison clean and compelling: same architecture, same parameter count, different role — expected dramatic improvement.
+
+---
+
+## 14. Generalization Tests (Post-Training)
 
 After training, evaluate at out-of-distribution channel conditions:
 
@@ -529,7 +717,7 @@ These generalization tests distinguish a model that has genuinely learned channe
 
 ---
 
-## 13. Key References
+## 15. Key References
 
 | Paper | Relevance |
 |-------|-----------|
@@ -540,7 +728,7 @@ These generalization tests distinguish a model that has genuinely learned channe
 
 ---
 
-## 14. Implementation Checklist
+## 16. Implementation Checklist
 
 ### Completed ✅
 
@@ -548,8 +736,8 @@ These generalization tests distinguish a model that has genuinely learned channe
 - [x] `TrainConfig` dataclass with all hyperparameters and automatic path resolution
 - [x] `build_codeword_pool(trellis, pool_size, seed)` — pre-encodes codewords, handles variable-length symbols
 - [x] `generate_training_batch(pool, batch_size, snr_range, inr_range, period_range, rng, device)` — fresh channel per block
-- [x] `validate_bler(model, trellis, pool, snr_db, inr_db, n_blocks, device, seed)` — BLER evaluation without gradient
-- [x] `train_model(config, seed)` — full training loop with Adam + StepLR + gradient clipping + early stopping + checkpointing + JSON logging
+- [x] `validate_bler(model, trellis, pool, snr_db, inr_db, n_blocks, device, seed)` — BLER + bit accuracy evaluation without gradient
+- [x] `train_model(config, seed, model=None)` — full training loop with Adam + StepLR + gradient clipping + early stopping + checkpointing on bit accuracy + JSON logging + optional pretrained model for curriculum training
 - [x] `make_decoder_n1(model, device)` — `eval.py`-compatible decode wrapper
 - [x] `load_model(checkpoint_path, device)` — reconstruct from checkpoint
 - [x] Smoke test in `__main__` block
@@ -557,21 +745,26 @@ These generalization tests distinguish a model that has genuinely learned channe
 - [x] `test_neural_overfit.py` — training sanity check (pytest)
 - [x] `test_overfit_gru_batch.py` — standalone overfit script (verified passing: loss 0.003, 100% accuracy)
 - [x] `test_neural_vs_b1.py` — performance gating (skips without checkpoint)
+- [x] Fixed critical architecture bug: per-timestep output → mean-pool + Linear(64, 256)
+- [x] Fixed validation mismatch: val SNR/INR now matches training distribution midpoint
+- [x] Fixed checkpointing metric: bit accuracy instead of BLER
+- [x] Implemented attention pooling variant
+- [x] Implemented curriculum training support (multi-stage with pretrained model passing)
+- [x] Trained GRU with mean pooling at SNR 15–20 dB, 200 epochs → 53.1% bit accuracy
+- [x] Trained GRU with attention pooling at SNR 15–20 dB, 200 epochs → 53.8% bit accuracy
+- [x] Documented negative result and Phase 2a conclusion
 
-### Pending ⬜
+### Not Pursued (justified by negative result) ⬜
 
-- [ ] Find budget-compliant hidden size via `test_find_budget_hidden_size` and retrain with it
-- [ ] Train GRU variant: `train_model(TrainConfig(cell_type="GRU"), seed=42)`
-- [ ] Train LSTM variant: `train_model(TrainConfig(cell_type="LSTM", hidden_size=26), seed=42)`
-- [ ] Train vanilla RNN variant: `train_model(TrainConfig(cell_type="RNN"), seed=42)`
-- [ ] Evaluate: BLER vs SNR sweep at INR=5 dB (100,000 MC blocks per point)
-- [ ] Evaluate: BLER vs INR sweep at SNR=5 dB (100,000 MC blocks per point)
-- [ ] Generalization tests: INR=12, 15 dB; P=4, 48
-- [ ] Compare N1 vs B1, B2, B5 — verify ≥0.5 dB gain at BLER=10⁻³
-- [ ] Generate `phase2a_bler_vs_snr.pdf`, `phase2a_bler_vs_inr.pdf`, `training_loss.pdf`
-- [ ] Report measured op count from `count_flops_birnn_analytical` (or `thop`) in `compute_cost.py`
-- [ ] Populate Phase 2a row in the compute table in the progress report
+- [ ] ~~Train LSTM variant~~ — GRU already failed; LSTM unlikely to succeed at matched compute
+- [ ] ~~Train vanilla RNN variant~~ — strictly weaker than GRU
+- [ ] ~~BLER vs SNR sweep evaluation~~ — model never achieved meaningful decoding
+- [ ] ~~BLER vs INR sweep evaluation~~ — same reason
+- [ ] ~~Generalization tests~~ — no useful model to test
+- [ ] ~~Compare N1 vs B1, B2, B5~~ — N1 BLER = 1.0 at all conditions
+- [ ] ~~Generate phase2a_bler_vs_snr.pdf, phase2a_bler_vs_inr.pdf~~ — no meaningful data to plot
+- [ ] ~~Find budget-compliant hidden size and retrain~~ — reducing h would only make performance worse
 
 ---
 
-*Last updated: April 6, 2026 — Architecture updated to mean-pool + Linear(64,256); overfit test verified passing.*
+*Last updated: April 7, 2026 — Training experiments complete. Negative result documented. Mean pooling (53.1%) and attention pooling (53.8%) both failed. Phase 2a concluded; motivation for Phase 2b established.*
