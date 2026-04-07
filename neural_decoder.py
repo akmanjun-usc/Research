@@ -145,8 +145,9 @@ class BiRNNDecoder(nn.Module):
         Returns:
             logits: (batch, K_INFO=256) — logits for all info bits
         """
-        rnn_out, _ = self.rnn(x)          # (batch, N_sym, 2H)
-        pooled = rnn_out.mean(dim=1)      # (batch, 2H)
+        rnn_out, h_n = self.rnn(x)        # h_n: (2, B, H) for bidirectional
+        # pooled = rnn_out.mean(dim=1)    # (batch, 2H) — mean pooling (disabled)
+        pooled = h_n.transpose(0, 1).reshape(x.size(0), -1)  # (B, 2H) — final hidden states
         return self.output_linear(pooled) # (batch, K_INFO)
 
 
