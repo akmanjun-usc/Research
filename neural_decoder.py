@@ -444,10 +444,10 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'config': asdict(config),
-                'epoch': epoch,
-                'val_bler': val_bler,
-                'val_bit_acc': val_bit_acc,
-                'loss': avg_loss,
+                'epoch': int(epoch),
+                'val_bler': float(val_bler),
+                'val_bit_acc': float(val_bit_acc),
+                'loss': float(avg_loss),
             }, ckpt_path)
             best_epoch = epoch
         else:
