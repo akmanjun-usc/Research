@@ -134,16 +134,8 @@ class BiRNNDecoder(nn.Module):
         # Optional BatchNorm1d between GRU and output layer
         self.bn = nn.BatchNorm1d(self.rnn_out_dim) if use_batchnorm else None
 
-        # Shared linear: W_out (1 x rnn_out_dim) + bias
-        self.output_linear = nn.Linear(self.rnn_out_dim, 1)
-
-        # Info bit positions: rate-1/2 -> info bits at even positions
-        # positions 0, 2, 4, ..., 510 (256 positions in first 512 coded bits)
-        # Tail bits (positions 512-523) are excluded
-        self.register_buffer(
-            'info_positions',
-            torch.arange(0, 2 * n_info, 2, dtype=torch.long),
-        )
+        # Linear maps pooled GRU output -> n_info logits directly
+        self.output_linear = nn.Linear(self.rnn_out_dim, n_info)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -151,17 +143,11 @@ class BiRNNDecoder(nn.Module):
             x: (batch, N_sym, input_dim) — received signal
 
         Returns:
-            logits: (batch, K_INFO=256) — logits for info bit positions
+            logits: (batch, K_INFO=256) — logits for all info bits
         """
-        rnn_out, _ = self.rnn(x)  # (batch, N_sym, rnn_out_dim)
-
-        if self.bn is not None:
-            rnn_out = self.bn(rnn_out.transpose(1, 2)).transpose(1, 2)
-
-        all_logits = self.output_linear(rnn_out).squeeze(-1)  # (batch, N_sym)
-
-        # Select info bit positions
-        return all_logits[:, self.info_positions]
+        rnn_out, _ = self.rnn(x)          # (batch, N_sym, 2H)
+        pooled = rnn_out.mean(dim=1)      # (batch, 2H)
+        return self.output_linear(pooled) # (batch, K_INFO)
 
 
 # ─────────────────────────────────────────────

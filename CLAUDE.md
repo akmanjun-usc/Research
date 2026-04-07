@@ -19,8 +19,13 @@ The goal is **not** to beat polar codes on clean AWGN. The goal is robustness, g
 | Parameter | Value |
 |-----------|-------|
 | Modulation | BPSK ∈ {-1, +1} |
-| Block length | K=256 info bits, N=512 coded bits |
-| Code rate | R = 1/2 |
+| Info bits | K = 256 |
+| Constraint length | K_c = 7 (memory m = 6, so S = 2^m = 64 states) |
+| Tail bits | m = 6 zero bits appended to force trellis back to state 0 |
+| Total input bits | K + m = 256 + 6 = 262 |
+| Coded block length | N = 2 × (K + m) = 2 × 262 = 524 coded bits (includes 12 termination coded bits) |
+| Nominal code rate | R = 1/2 (per trellis section) |
+| Effective code rate | R_eff = K / N = 256 / 524 ≈ 0.4885 (due to termination overhead) |
 | Trellis states | S = 64 |
 | Trellis structure | Time-invariant, terminated (forced back to state 0) |
 | SNR range | 0–10 dB (focus point: 5 dB) |
@@ -102,7 +107,7 @@ project/
 - Use `compute_cost.py` to profile every method: FLOPs, wall-clock time per block, memory
 - The constraint is 2.1M operations — enforce this across ALL methods being compared
 - For neural methods: use `thop` or `pytorch-OpCounter` to count ops
-- For classical methods: count multiply-adds analytically (Viterbi: O(S²·N))
+- For classical methods: count multiply-adds analytically (Viterbi: O(S²·N), where N=524)
 - Report as a table in the paper: method vs BLER vs ops vs latency
 
 ```python
@@ -187,12 +192,12 @@ The decoder replaces the entire Viterbi algorithm. It takes the raw received sig
 
 | Layer | Detail |
 |-------|--------|
-| Input | r[t] at each of 512 time steps. Input dim = 1 (optionally 2 if appending normalized time index t/512) |
-| RNN | Bidirectional GRU, h=32 hidden units per direction. Forward GRU reads t=0..511, backward GRU reads t=511..0. Separate learned weights per direction. |
+| Input | r[t] at each of N=524 time steps (512 from info bits + 12 from tail bits). Input dim = 1 (optionally 2 if appending normalized time index t/N) |
+| RNN | Bidirectional GRU, h=32 hidden units per direction. Forward GRU reads t=0..523, backward GRU reads t=523..0. Separate learned weights per direction. |
 | Concatenation | At each position t: c[t] = [h_forward[t]; h_backward[t]], dim = 64 |
 | Batch norm | Optional BatchNorm1d between GRU and output layer for training stability |
-| Output | Shared linear layer W_out (1 x 64) + bias, applied at each of 512 positions, followed by sigmoid. Produces 512 probabilities. |
-| Bit selection | Select 256 outputs corresponding to info bit positions (defined by trellis mapping). Discard the other 256. |
+| Output | Shared linear layer W_out (1 x 64) + bias, applied at each of N=524 positions, followed by sigmoid. Produces 524 probabilities. |
+| Bit selection | Select 256 outputs corresponding to info bit positions (defined by trellis mapping). Discard the other 268 (256 parity + 12 termination). Tail bit positions are known (zero-forced) and excluded from loss. |
 
 **RNN Cell Variants to Compare**
 
@@ -202,9 +207,9 @@ Run all three at matched compute budgets and report in paper:
 |---------|---------------------|------------|---------|
 | Bidirectional GRU | 32 | ~3.2M (needs trimming, see note) | Primary candidate. GRU converges faster, fewer params than LSTM. |
 | Bidirectional LSTM | 26 | ~3.2M | Compare. LSTM has separate cell state for tracking periodicity. 33% more ops per unit so smaller hidden size at same budget. |
-| Bidirectional vanilla RNN | 32 | ~2.1M | Sanity check. Expected to fail on length-512 sequences due to vanishing gradients. |
+| Bidirectional vanilla RNN | 32 | ~2.1M | Sanity check. Expected to fail on length-524 sequences due to vanishing gradients. |
 
-**Compute Budget Note:** Bidirectional GRU with h=32 gives ~3.2M ops, exceeding the 2.1M budget. Options to resolve: (a) reduce to h=26 per direction (~2.1M ops), (b) process in temporal chunks of length 128 with overlap, (c) use unidirectional GRU h=40 (~2.0M ops) and accept loss of future context. Run op counter via `thop` to find the exact hidden size that hits 2.1M. Report final architecture choice with measured op count.
+**Compute Budget Note:** Bidirectional GRU with h=32 gives ~3.3M ops (at N=524), exceeding the 2.1M budget. Options to resolve: (a) reduce to h=26 per direction (~2.1M ops), (b) process in temporal chunks of length 128 with overlap, (c) use unidirectional GRU h=40 (~2.0M ops) and accept loss of future context. Run op counter via `thop` to find the exact hidden size that hits 2.1M at sequence length N=524. Report final architecture choice with measured op count. Note: N=524 (not 512) due to 12 termination coded bits — ops scale linearly with sequence length.
 
 **GRU Equations (per direction, per time step)**
 
@@ -223,9 +228,9 @@ At each position t, the concatenated hidden state c[t] (64 dims) maps to one pro
 ```
 p[t] = sigmoid( W_out . c[t] + b_out )
 ```
-W_out is 1x64, b_out is scalar. Same weights shared across all 512 positions (weight sharing).
+W_out is 1x64, b_out is scalar. Same weights shared across all N=524 positions (weight sharing).
 
-Final output: select the 256 positions corresponding to info bits (positions 0, 2, 4, ..., 510 for rate-1/2 trellis, or whatever mapping trellis.py defines).
+Final output: select the 256 positions corresponding to info bits (positions 0, 2, 4, ..., 510 for rate-1/2 trellis, or whatever mapping trellis.py defines). The final 12 positions (indices 512–523) correspond to tail bit encoding and are excluded — the tail bits are known zeros used only for trellis termination.
 
 **Parameter Count**
 
@@ -251,7 +256,7 @@ Adam optimizer with the following schedule:
 
 Each mini-batch generates fresh random data using existing channel.py and trellis.py:
 1. Sample K=256 random info bits
-2. Encode through trellis (trellis.py) to get N=512 coded bits
+2. Encode through trellis (trellis.py) to get N=524 coded bits (256 info bits + 6 tail bits, each producing 2 coded bits)
 3. BPSK modulate: x[t] = 2*c[t] - 1
 4. Sample channel params uniformly per block:
    - SNR ~ Uniform(0, 10) dB
@@ -259,7 +264,7 @@ Each mini-batch generates fresh random data using existing channel.py and trelli
    - P ~ Uniform(8, 32) (integer or continuous, experiment with both)
    - φ ~ Uniform(0, 2π)
 5. Generate noise + interference via channel.py
-6. Received signal r[t] = x[t] + n[t] + i[t], shape (batch_size, 512, 1)
+6. Received signal r[t] = x[t] + n[t] + i[t], shape (batch_size, 524, 1)
 
 **Evaluation Metric**
 
@@ -389,6 +394,7 @@ Evaluation uses 100,000 Monte Carlo blocks per (SNR, INR) point.
 ## Coding Conventions
 - All functions typed with Python type hints
 - No global state
+- **Never hardcode N=524 or K=256 as literals.** Derive coded block length as `N = 2 * (K + memory)` where `memory = K_c - 1 = 6`. Use config dicts or function parameters.
 - Every module has a `__main__` block with a basic smoke test
 - Random seeds: always pass `seed` argument explicitly, never rely on global state
 - Cluster-ready: no hardcoded local paths; use `pathlib.Path` and config dicts
