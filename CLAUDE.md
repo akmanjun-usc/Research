@@ -86,6 +86,24 @@ project/
 
 ---
 
+## Current Repo Snapshot (2026-04-08)
+
+**Git state:** clean working tree.
+
+**What is present now:**
+- Phase 1 baseline code, figures, `.npz` sweep outputs, and `results/phase1/compute_table.md` are checked in.
+- Phase 2a code is present in `neural_decoder.py`; `results/phase2a/checkpoints/` and `results/phase2a/logs/` exist but are empty.
+- Phase 2b code is present in `neural_bm.py` and the associated tests exist under `tests/`.
+- One Phase 2b checkpoint is checked in: `results/phase2b/checkpoints/best_model_seed99.pt`.
+- No Phase 2b logs or figures are currently checked in.
+
+**Important repo-level status notes:**
+- The Phase 2b tests `tests/test_nbm_vs_b1.py` currently look for `best_model_seed42.pt`, but the committed checkpoint is `best_model_seed99.pt`.
+- `search.py` and `fitness.py` are still not present; trellis search has not started.
+- `pytest` was not available on the current shell path during this documentation update, so the status below is based on repository contents rather than a fresh full test run.
+
+---
+
 ## Approaches to Implement (All Phases)
 
 ### Baselines (Phase 1)
@@ -387,36 +405,48 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 - Jiang et al., "LEARN Codes: Inventing Low-Latency Codes via RNNs" (2019, IEEE TCOM)
 - Kim et al., "Communication Algorithms via Deep Learning" (2018) — Bi-GRU decoder with BatchNorm
 
-#### 2b — Neural Branch Metric Estimator (N2) ← **ACTIVE PHASE**
+#### 2b — Neural Branch Metric Estimator (N2) ← **IN PROGRESS**
 
 **Motivation (from Phase 2a negative result):** End-to-end decoding failed because a small BiGRU cannot implicitly learn Viterbi over 64 states. Solution: keep the Viterbi/BCJR graph structure intact and replace only the branch metric computation with a small neural network. The NN needs to learn only a local channel likelihood — a much simpler mapping than end-to-end decoding.
 
 **Full architecture specification:** See "Neural Branch Metric Estimator — Full Design Specification" section above.
 
-**Implementation plan (ordered):**
+**Current implementation status:**
 
-- [ ] **Step 1 — `neural_bm.py` core module:**
-  - [ ] `NeuralBranchMetric(nn.Module)`: BiGRU(h=16/dir, 1 layer) + BatchNorm + Linear(32→4), input shape (batch, 262, 2)
-  - [ ] `compute_oracle_metrics(y_paired, x_bpsk_paired, interference_paired, sigma)` → (T, 4) ground truth
-  - [ ] `viterbi_neural_bm(branch_metrics, trellis)` → decoded bits; uses NN scores instead of analytical γ
-  - [ ] `__main__` smoke test: random input → shapes correct → Viterbi decodes something
-- [ ] **Step 2 — Training loop:**
-  - [ ] `train_neural_bm(config, seed)`: MSE loss on oracle metrics, on-the-fly data, BLER validation
-  - [ ] Checkpoint saving/loading, training logs
-- [ ] **Step 3 — Tests:**
-  - [ ] `test_nbm_ops.py` — total ops ≤ 2.1M
-  - [ ] `test_nbm_overfit.py` — fixed channel, MSE→0, BLER→0 at high SNR
-  - [ ] `test_nbm_awgn.py` — pure AWGN: N2 ≈ B1
-  - [ ] `test_nbm_vs_b1.py` — interference: N2 beats B1 by ≥0.5 dB
-- [ ] **Step 4 — Evaluation:**
-  - [ ] `make_decoder_n2(model, device)` wrapper for `eval.py`
-  - [ ] BLER vs SNR curves (N2, B1, B2, B5)
-  - [ ] BLER vs INR curves
-  - [ ] Compute cost table
-  - [ ] Distribution shift tests
-- [ ] **Step 5 — Ablations:**
+- [x] **Step 1 — `neural_bm.py` core module implemented**
+  - [x] `NeuralBranchMetric(nn.Module)`: BiGRU + BatchNorm + Linear head
+  - [x] `compute_oracle_metrics(...)`
+  - [x] `viterbi_neural_bm(branch_metrics, trellis, index_table)`
+  - [x] `make_decoder_n2(...)` wrapper for `eval.py`
+  - [x] `load_model(...)`
+  - [x] `__main__` smoke test / CLI entry point with optional `--train`
+- [x] **Step 2 — Training loop implemented**
+  - [x] On-the-fly batch generation
+  - [x] MSE loss on oracle metrics
+  - [x] BLER-based validation
+  - [x] Early stopping and checkpoint save/load
+  - [ ] Persisted training logs are not currently checked in
+- [x] **Step 3 — Test files implemented**
+  - [x] `test_nbm_ops.py`
+  - [x] `test_nbm_overfit.py`
+  - [x] `test_nbm_awgn.py`
+  - [x] `test_nbm_vs_b1.py`
+  - [ ] Current repo status does not confirm a fresh passing run for the full Phase 2b suite
+  - [ ] `test_nbm_vs_b1.py` expects `best_model_seed42.pt`, but the committed checkpoint is `best_model_seed99.pt`
+- [ ] **Step 4 — Evaluation incomplete**
+  - [ ] BLER vs SNR curves (N2, B1, B2, B5) not checked in
+  - [ ] BLER vs INR curves not checked in
+  - [ ] Compute cost table for N2 not checked in
+  - [ ] Distribution shift tests not implemented
+- [ ] **Step 5 — Ablations incomplete**
   - [ ] Hidden size sweep h ∈ {8, 12, 16, 24}
   - [ ] Visualize learned vs oracle metrics
+
+**Artifacts currently committed for N2:**
+- `results/phase2b/checkpoints/best_model_seed99.pt`
+
+**Immediate next cleanup item:**
+- Align the Phase 2b checkpoint naming and test assumptions so `test_nbm_vs_b1.py` and any related evaluation scripts target the checkpoint that actually exists in the repo.
 
 **Deliverable:** BLER curves + compute table for N2, B1, B2, B5. Evidence of robustness to distribution shift.
 

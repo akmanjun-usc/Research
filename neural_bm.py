@@ -489,7 +489,7 @@ DEFAULT_CONFIG: dict = {
     'num_epochs': 200,
     'patience': 20,
     'grad_clip': 1.0,
-    'snr_range': (1.0, 7.0),
+    'snr_range': (0.0, 10.0),
     'inr_range': (-5.0, 15.0),
     'period_range': (8, 32),
     'val_snr': 5.0,
