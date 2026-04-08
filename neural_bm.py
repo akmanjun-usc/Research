@@ -39,6 +39,38 @@ from channel import (
 from decoders import _build_reverse_trellis
 from trellis import CONSTRAINT_LEN, K_INFO, Trellis, load_nasa_k7
 
+# Number of memory elements in the K=7 code (= constraint length − 1)
+_N_TAIL = CONSTRAINT_LEN - 1   # 6
+# Fixed coded block length (always 2 × (K_INFO + N_TAIL) = 524)
+_N_CODED_FIXED = 2 * (K_INFO + _N_TAIL)  # 524
+
+
+# ─────────────────────────────────────────────
+# Fixed-tail encoder helper
+# ─────────────────────────────────────────────
+
+def _encode_fixed_tail(info_bits: np.ndarray, trellis: Trellis) -> np.ndarray:
+    """
+    Encode info_bits with exactly _N_TAIL = 6 zero-input tail steps.
+
+    Unlike trellis.encode(), which stops early when the state reaches 0,
+    this function always produces exactly 2*(K_INFO + 6) = 524 coded bits.
+    For the NASA K=7 shift-register code, 6 zero inputs always drive the
+    state to 0 regardless of the starting state, so the output is valid.
+
+    Returns:
+        coded_bits: (524,) int8
+    """
+    state = 0
+    coded: list[int] = []
+    for bit in info_bits:
+        coded.extend(trellis.output_bits[state, int(bit)])
+        state = trellis.next_state[state, int(bit)]
+    for _ in range(_N_TAIL):
+        coded.extend(trellis.output_bits[state, 0])
+        state = trellis.next_state[state, 0]
+    return np.array(coded, dtype=np.int8)
+
 
 # ─────────────────────────────────────────────
 # BPSK pair constants
@@ -383,15 +415,15 @@ def _generate_training_batch(
 
     for _ in range(batch_size):
         info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-        coded = trellis.encode(info_bits)
+        coded = _encode_fixed_tail(info_bits, trellis)   # always 524 bits
         symbols = bpsk_modulate(coded)
-        N = len(symbols)
+        N = len(symbols)  # always 524
 
         received = awgn_channel(symbols, snr_db, inr_db, period, phase, rng)
         interference = generate_interference(N, amplitude, period, phase)
 
-        y_list.append(pair_received_signal(received))      # (T, 2)
-        interf_list.append(pair_received_signal(interference))  # (T, 2)
+        y_list.append(pair_received_signal(received))      # (262, 2)
+        interf_list.append(pair_received_signal(interference))  # (262, 2)
 
     y_batch = torch.tensor(np.stack(y_list), dtype=torch.float32, device=device)
     interf_batch = torch.tensor(np.stack(interf_list), dtype=torch.float32, device=device)
@@ -426,7 +458,7 @@ def _validate_bler(
             phase = float(rng.uniform(0.0, 2.0 * np.pi))
 
             info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-            coded = trellis.encode(info_bits)
+            coded = _encode_fixed_tail(info_bits, trellis)   # always 524 bits
             symbols = bpsk_modulate(coded)
             received = awgn_channel(symbols, val_snr, val_inr, period, phase, rng)
 
@@ -633,7 +665,7 @@ if __name__ == "__main__":
 
     # 2. Generate one real block and compute oracle metrics
     info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-    coded = trellis.encode(info_bits)
+    coded = _encode_fixed_tail(info_bits, trellis)   # always 524 bits
     symbols = bpsk_modulate(coded)
     N = len(symbols)
 
