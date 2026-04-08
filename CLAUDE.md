@@ -54,7 +54,7 @@ project/
 ├── compute_cost.py     # FLOPs/latency profiler (applies to ALL methods)
 ├── plot_utils.py       # IEEE-style figures, Paul Tol palette, BLER curves
 ├── neural_decoder.py   # [Phase 2a] BiRNNDecoder (BiGRU, final-hidden-state pooling), training loop, decode fn
-├── neural_bm.py        # [Phase 2b] Neural branch metric estimator — not yet created
+├── neural_bm.py        # [Phase 2b] Neural branch metric estimator + Viterbi integration
 ├── search.py           # [Phase 3] Evolutionary/SA trellis search — not yet created
 ├── fitness.py          # [Phase 3] Two-tier fitness: cheap proxy + full eval — not yet created
 ├── tests/
@@ -66,13 +66,21 @@ project/
 │   ├── test_neural_ops.py      # [Phase 2a] Verify GRU/LSTM/RNN op count ≤ 2.1M
 │   ├── test_neural_overfit.py  # [Phase 2a] Overfit on 1 batch to verify learning works
 │   ├── test_neural_vs_b1.py    # [Phase 2a] N1 must beat B1 by ≥0.5 dB
-│   └── test_overfit_gru_batch.py   # [Phase 2a] Single-batch GRU overfit sanity check
+│   ├── test_overfit_gru_batch.py   # [Phase 2a] Single-batch GRU overfit sanity check
+│   ├── test_nbm_ops.py         # [Phase 2b] Verify neural BM + Viterbi total ops ≤ 2.1M
+│   ├── test_nbm_overfit.py     # [Phase 2b] Overfit on 1 batch — branch metrics should converge to oracle
+│   ├── test_nbm_awgn.py        # [Phase 2b] On pure AWGN, N2 ≈ B1 (no interference to learn)
+│   └── test_nbm_vs_b1.py       # [Phase 2b] N2 must beat B1 by ≥0.5 dB under interference
 └── results/
     ├── phase1/         # Phase 1 eval: .npz data, compute_table.md
     │   └── figures/    # phase1_bler_vs_snr.pdf, phase1_bler_vs_inr.pdf
     ├── phase2a/        # Phase 2a eval: model checkpoints (empty — training failed), logs
     │   ├── checkpoints/  # Empty — no successful model saved
     │   └── logs/         # Training logs (if any runs completed)
+    ├── phase2b/        # Phase 2b eval
+    │   ├── checkpoints/  # Trained neural BM models
+    │   ├── logs/         # Training logs
+    │   └── figures/      # BLER curves, metric visualizations
     └── test/           # Test-generated plots
 ```
 
@@ -121,18 +129,168 @@ def measure_latency(model_or_fn, sample_input, n_runs=1000) -> float: ...  # ms 
 
 ---
 
-## Neural Branch Metric Estimator — Design Notes (Phase 2b, Ideation Needed)
+## Neural Branch Metric Estimator — Full Design Specification (Phase 2b)
 
-**Concept:** Keep the Viterbi/BCJR graph structure. Replace the branch metric γ(s→s', y_t) with a small neural network output.
+### Concept
 
-**Why this is interesting:** Preserves the optimality structure of dynamic programming while learning to handle interference in the metric computation. The NN only needs to predict a scalar (log-likelihood proxy) per branch per time step.
+Keep the Viterbi dynamic programming structure intact. Replace *only* the branch metric computation γ(s→s', y_t) with a small neural network. The NN learns to produce interference-aware log-likelihood scores; Viterbi handles the global trellis search optimally given those scores.
 
-**Architecture directions to explore (TBD with collaborator/Claude):**
-- Small MLP: input = [y_t, t mod P_est, context window y_{t-k:t}] → scalar branch score
-- 1D CNN over local window of received samples → branch scores for all states at time t
-- Key constraint: must keep total ops ≤ 2.1M across the full decoding pass
+### Why This Works (and Phase 2a Didn't)
 
-**Open question:** How much context window does the NN need to effectively estimate interference? This is an experiment to run.
+Phase 2a failed because a ~23K-parameter BiGRU was asked to implicitly learn the Viterbi search over 64 states × 524 time steps — a combinatorially hard sequence-to-vector mapping. Phase 2b decomposes the problem:
+
+| | Phase 2a (failed) | Phase 2b (proposed) |
+|---|---|---|
+| **Task** | Predict 256 info bits from 524 received samples | Predict branch metrics at each of 524 time steps |
+| **Output shape** | (batch, 256) — sequence-to-vector | (batch, 262, num_branch_outputs) — sequence-to-sequence |
+| **What NN learns** | Implicit Viterbi search (impossible at this scale) | Local channel likelihood estimation (simple) |
+| **Who does the search** | The NN alone | Viterbi algorithm (optimal DP) |
+| **NN complexity needed** | Very large (would need to represent 64-state trellis) | Small (only needs to track a 3-parameter sinusoid) |
+| **Training target** | Info bits via BCE | Oracle branch metrics via MSE |
+
+### Architecture: BiGRU Sequence-to-Sequence Branch Metric Estimator
+
+```
+Input:  (batch, T, 1)              — T = K + m = 262 trellis steps, each with
+                                      rate-1/2 outputs, so 2 received samples per step
+        Reshape to (batch, T, 2)   — pair received samples per trellis section
+
+BiGRU:  hidden_size=h per direction, num_layers=1
+        Input:  (batch, T, 2)
+        Output: (batch, T, 2h) — all hidden states, both directions
+
+Linear: Linear(2h, num_branch_outputs) per time step
+        Output: (batch, T, num_branch_outputs) — one score per possible branch output
+
+Interpretation: output[b, t, j] = learned branch metric for branch output j at time t
+                These replace γ(s→s', y_t) in Viterbi ACS
+```
+
+**Key design choice — input grouping:** The trellis has 262 sections (K+m=262), each producing 2 coded bits. Group received samples as pairs (y_{2t}, y_{2t+1}) per trellis step, giving input shape (batch, 262, 2). This aligns the NN's time axis with the trellis time axis.
+
+**Number of branch outputs:** For rate-1/2 code, each trellis section has 2 possible input bits (0 or 1), producing one of 2 possible output pairs. But multiple states can share the same output pair. The NN outputs a score for each of the 4 possible BPSK output pairs: {(-1,-1), (-1,+1), (+1,-1), (+1,+1)}. During Viterbi, for each transition (s→s'), look up which output pair that transition produces and use the corresponding NN score.
+
+So `num_branch_outputs = 4`.
+
+### Hidden Size Selection and Compute Budget
+
+The NN must estimate A·sin(2πt/P + φ) — a sinusoid with 3 continuous parameters (A, P, φ) that vary per block. The BiGRU hidden state needs enough capacity to infer these from noisy observations. Start with h=16 per direction:
+
+| Component | Op Count (approx) |
+|-----------|-------------------|
+| BiGRU (h=16, T=262, input=2) | 262 × 2(dirs) × 3(gates) × 16 × (16+2) × 2(mul+add) ≈ 905K |
+| Linear (32→4, T=262) | 262 × 32 × 4 ≈ 34K |
+| Viterbi ACS (64 states, 262 steps, 2 branches/state) | 262 × 64 × 2 × ~4 ops ≈ 134K |
+| **Total** | **≈ 1.07M** |
+
+Well under 2.1M budget. This leaves room to increase h if needed.
+
+**Hyperparameter sweep plan:** Test h ∈ {8, 12, 16, 24}. Expect diminishing returns above h=16 for this task complexity.
+
+### Training Procedure
+
+**Training targets — Oracle branch metrics:**
+
+For each training sample, we know the true interference parameters (A, P, φ) because we generate the data. Compute oracle branch metrics:
+
+```python
+# For trellis step t, branch output pair (c0, c1) mapped to BPSK (x0, x1):
+# Oracle metric = -[(y_{2t} - x0 - interference_{2t})² + (y_{2t+1} - x1 - interference_{2t+1})²] / (2σ²)
+# This is the log-likelihood under the true channel model.
+```
+
+The NN is trained to match these oracle metrics via MSE loss.
+
+**Why MSE on oracle metrics (not BCE on bits):** The branch metric is a continuous scalar representing log-likelihood. MSE directly measures how well the NN approximates the oracle metric. There is no classification boundary to learn — just a regression target. This is also what ViterbiNet (Shlezinger et al.) and BCJRNet use.
+
+**Training configuration:**
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Loss | MSE on branch metrics | Regression target, not classification |
+| Optimizer | Adam | Standard for small NNs |
+| Learning rate | 1e-3, decay by 0.5 every 50 epochs | Staircase decay (per Kargı et al.) |
+| Batch size | 256 | On-the-fly generation, no dataset size limit |
+| Training SNR | Uniform over [1, 7] dB | Covers focus range; avoid extremes |
+| Training INR | Uniform over [-5, 15] dB | Full INR range |
+| Training P | Uniform integer over [8, 32] | Full period range |
+| Training φ | Uniform over [0, 2π] | Full phase range |
+| Epochs | 200 (with early stopping, patience=20) | |
+| Data generation | On-the-fly per mini-batch | No static dataset; infinite variety |
+| Gradient clipping | max_norm=1.0 | Stabilize BiGRU training |
+| Batch normalization | Between BiGRU output and linear head | Per Kargı et al. and Zhang & Luo |
+
+**Validation:** Every 5 epochs, run 1,000 blocks at SNR=5 dB, INR=5 dB with Viterbi decoding using the NN's branch metrics. Track BLER as the primary validation metric (not just MSE).
+
+### Viterbi Integration
+
+The existing `decoders.py` Viterbi implementation computes branch metrics analytically:
+
+```python
+# Current (B1 mismatched): γ = -||y - x_hypothesis||² / (2σ²)
+# Current (B2 oracle):     γ = -||y - x_hypothesis - interference||² / (2σ²)
+```
+
+For N2, replace this with:
+
+```python
+# N2 (neural BM): γ(s→s', t) = nn_output[t, branch_output_index(s, s')]
+```
+
+**Implementation approach:** Create a new Viterbi function `viterbi_neural_bm(nn_branch_metrics, trellis)` that:
+1. Takes pre-computed NN branch metrics of shape (T, 4) — already computed in a single forward pass
+2. For each trellis step t and each transition (s→s'), looks up the NN score for the output pair that transition produces
+3. Runs standard ACS (add-compare-select) using these scores
+4. Returns decoded bits via traceback
+
+This means the NN forward pass happens ONCE for the whole block, producing all branch metrics. Then Viterbi runs using those metrics. No per-step NN calls.
+
+### Sanity Checks and Tests (implement in order)
+
+1. **test_nbm_ops.py:** Verify total ops (NN forward + Viterbi) ≤ 2.1M
+2. **test_nbm_overfit.py:** Fix one (SNR, INR, P, φ) setting. Train on repeated identical batches. NN branch metrics should converge toward oracle metrics (MSE → ~0). Viterbi with these metrics should achieve ~0 BLER at high SNR.
+3. **test_nbm_awgn.py:** On pure AWGN (INR=-∞), N2 should perform ≈ B1. The NN should learn that branch metrics are just standard Euclidean distance. This validates the integration doesn't break anything.
+4. **test_nbm_vs_b1.py:** Under interference (INR=5 dB), N2 should beat B1 by ≥0.5 dB at BLER=10⁻³.
+
+### Implementation Steps (Ordered)
+
+**Step 1 — `neural_bm.py` core module:**
+- [ ] `NeuralBranchMetric(nn.Module)`: BiGRU + BN + Linear, configurable h
+- [ ] `compute_oracle_metrics(y, x_bpsk, interference, sigma)`: ground truth targets
+- [ ] `viterbi_neural_bm(branch_metrics, trellis)`: Viterbi using NN metrics, returns decoded bits
+- [ ] `__main__` smoke test: random input → forward pass → shapes correct → Viterbi runs
+
+**Step 2 — Training loop:**
+- [ ] `train_neural_bm(config, seed)`: on-the-fly batch generation, MSE loss on oracle metrics, BLER-based validation
+- [ ] Checkpoint saving/loading
+- [ ] Training log output (epoch, MSE, val_BLER)
+
+**Step 3 — Tests (in order):**
+- [ ] `test_nbm_ops.py` — compute budget
+- [ ] `test_nbm_overfit.py` — learning works
+- [ ] `test_nbm_awgn.py` — doesn't break clean channel
+- [ ] `test_nbm_vs_b1.py` — beats mismatched Viterbi
+
+**Step 4 — Evaluation:**
+- [ ] `make_decoder_n2(model, device)`: inference wrapper compatible with `eval.py`
+- [ ] BLER vs SNR sweep (N2, B1, B2, B5) at INR=5 dB
+- [ ] BLER vs INR sweep (N2, B1, B2, B5) at SNR=5 dB
+- [ ] Compute cost table for N2
+- [ ] Distribution shift test: train on P∈[8,32], test on P∈[4,8]∪[32,48]
+
+**Step 5 — Ablations (if N2 works):**
+- [ ] Hidden size sweep: h ∈ {8, 12, 16, 24}
+- [ ] Context window: compare BiGRU (full context) vs MLP (local window only) vs 1D-CNN
+- [ ] Visualize learned metrics vs oracle metrics at sample time steps
+
+### Key References for Phase 2b
+
+- Shlezinger et al., "ViterbiNet: A Deep Learning Based Viterbi Algorithm for Symbol Detection" (IEEE TWC, 2020) — DNN replaces branch metric in Viterbi; hybrid model-based/data-driven
+- Yang & Jiang, "Online Learning of Trellis Diagram Using Neural Network" (arXiv:2202.10635) — learns trellis diagram via ANN + pilot; integrates with Viterbi and BCJR
+- NN-Aided BCJR (Wang et al., IEEE VTC 2020) — NN replaces channel-model-based branch probability in BCJR; 2.3 dB gain over separate detection+decoding
+- Kargı & Duman, "A Deep Learning Based Decoder for Concatenated Coding over Deletion Channels" (ICC 2024) — BI-GRU as LLR estimator, 4–8 layers, hidden 128–1024, MSE/BCE loss, staircase LR decay, batch norm between layers
+- Yan et al., "Decoding for Punctured Convolutional and Turbo Codes" (arXiv:2502.15475, Feb 2025) — LSTM/BiGRU neural decoders, puncturing-aware embedding, generalizes across block lengths
+- Streit et al., "BCJRFormer" (ISIT 2025) — Transformer replaces BCJR for marker codes; relevant as next-generation alternative to BiGRU approach
 
 ---
 
@@ -229,16 +387,36 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 - Jiang et al., "LEARN Codes: Inventing Low-Latency Codes via RNNs" (2019, IEEE TCOM)
 - Kim et al., "Communication Algorithms via Deep Learning" (2018) — Bi-GRU decoder with BatchNorm
 
-#### 2b — Neural Branch Metric Estimator (N2) ← **ACTIVE NEXT PHASE**
+#### 2b — Neural Branch Metric Estimator (N2) ← **ACTIVE PHASE**
 
-**Motivation (from Phase 2a negative result):** End-to-end decoding failed because a small BiGRU cannot implicitly learn Viterbi over 64 states. Solution: keep the Viterbi/BCJR graph structure intact and replace only the branch metric computation with a small neural network. The NN needs to learn only a scalar log-likelihood proxy per branch per time step — a much simpler mapping than end-to-end decoding.
+**Motivation (from Phase 2a negative result):** End-to-end decoding failed because a small BiGRU cannot implicitly learn Viterbi over 64 states. Solution: keep the Viterbi/BCJR graph structure intact and replace only the branch metric computation with a small neural network. The NN needs to learn only a local channel likelihood — a much simpler mapping than end-to-end decoding.
 
-**Concept:** Replace γ(s→s', y_t) in the Viterbi ACS operation with a learned NN output. The DP structure handles global search; the NN handles local channel estimation.
+**Full architecture specification:** See "Neural Branch Metric Estimator — Full Design Specification" section above.
 
-- [ ] Design NN architecture for branch metric estimation (see design notes above)
-- [ ] Integrate with existing Viterbi/BCJR graph structure in `decoders.py`
-- [ ] Verify op count matches 2.1M budget
-- [ ] Compare N2 vs B1 (mismatched Viterbi) and B5 (IC+Viterbi)
+**Implementation plan (ordered):**
+
+- [ ] **Step 1 — `neural_bm.py` core module:**
+  - [ ] `NeuralBranchMetric(nn.Module)`: BiGRU(h=16/dir, 1 layer) + BatchNorm + Linear(32→4), input shape (batch, 262, 2)
+  - [ ] `compute_oracle_metrics(y_paired, x_bpsk_paired, interference_paired, sigma)` → (T, 4) ground truth
+  - [ ] `viterbi_neural_bm(branch_metrics, trellis)` → decoded bits; uses NN scores instead of analytical γ
+  - [ ] `__main__` smoke test: random input → shapes correct → Viterbi decodes something
+- [ ] **Step 2 — Training loop:**
+  - [ ] `train_neural_bm(config, seed)`: MSE loss on oracle metrics, on-the-fly data, BLER validation
+  - [ ] Checkpoint saving/loading, training logs
+- [ ] **Step 3 — Tests:**
+  - [ ] `test_nbm_ops.py` — total ops ≤ 2.1M
+  - [ ] `test_nbm_overfit.py` — fixed channel, MSE→0, BLER→0 at high SNR
+  - [ ] `test_nbm_awgn.py` — pure AWGN: N2 ≈ B1
+  - [ ] `test_nbm_vs_b1.py` — interference: N2 beats B1 by ≥0.5 dB
+- [ ] **Step 4 — Evaluation:**
+  - [ ] `make_decoder_n2(model, device)` wrapper for `eval.py`
+  - [ ] BLER vs SNR curves (N2, B1, B2, B5)
+  - [ ] BLER vs INR curves
+  - [ ] Compute cost table
+  - [ ] Distribution shift tests
+- [ ] **Step 5 — Ablations:**
+  - [ ] Hidden size sweep h ∈ {8, 12, 16, 24}
+  - [ ] Visualize learned vs oracle metrics
 
 **Deliverable:** BLER curves + compute table for N2, B1, B2, B5. Evidence of robustness to distribution shift.
 
