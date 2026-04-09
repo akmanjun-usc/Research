@@ -675,13 +675,36 @@ if __name__ == "__main__":
     parser.add_argument('--train', action='store_true', help='Run full training loop')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--hidden_size', type=int, default=16, help='GRU hidden size per direction')
+    parser.add_argument(
+        '--device',
+        type=str,
+        default=None,
+        help="Training device: e.g. 'cpu', 'cuda', or 'mps'. Defaults to auto-detect.",
+    )
     args = parser.parse_args()
 
+    if args.device is None:
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+    else:
+        device = args.device
+        if device.startswith('cuda') and not torch.cuda.is_available():
+            raise RuntimeError("Requested CUDA device, but torch.cuda.is_available() is False")
+        if device == 'mps' and (
+            not hasattr(torch.backends, 'mps') or not torch.backends.mps.is_available()
+        ):
+            raise RuntimeError("Requested MPS device, but MPS is not available")
+
     print("=== NeuralBranchMetric Smoke Test ===")
+    print(f"Device: {device}")
     rng = np.random.default_rng(args.seed)
 
     trellis = load_nasa_k7()
-    model = NeuralBranchMetric(hidden_size=args.hidden_size)
+    model = NeuralBranchMetric(hidden_size=args.hidden_size).to(device)
     model.eval()
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -691,7 +714,7 @@ if __name__ == "__main__":
     T = K_INFO + CONSTRAINT_LEN - 1  # 262
 
     # 1. Forward pass shape check
-    x = torch.randn(1, T, 2)
+    x = torch.randn(1, T, 2, device=device)
     with torch.no_grad():
         out = model(x)
     print(f"Input shape:  {tuple(x.shape)}")
@@ -713,21 +736,21 @@ if __name__ == "__main__":
     i_paired = pair_received_signal(interference)   # (T, 2)
     assert y_paired.shape == (T, 2), f"Paired shape wrong: {y_paired.shape}"
 
-    y_t = torch.tensor(y_paired[np.newaxis], dtype=torch.float32)   # (1, T, 2)
-    i_t = torch.tensor(i_paired[np.newaxis], dtype=torch.float32)   # (1, T, 2)
+    y_t = torch.tensor(y_paired[np.newaxis], dtype=torch.float32, device=device)   # (1, T, 2)
+    i_t = torch.tensor(i_paired[np.newaxis], dtype=torch.float32, device=device)   # (1, T, 2)
     oracle = compute_oracle_metrics(y_t, i_t, float(np.sqrt(noise_var)))
     print(f"Oracle metrics shape: {tuple(oracle.shape)}")
     assert oracle.shape == (1, T, 4)
 
     # 3. Viterbi with random branch metrics
     index_table = build_branch_output_index(trellis)
-    bm_np = out.squeeze(0).detach().numpy()  # (T, 4)
+    bm_np = out.squeeze(0).detach().cpu().numpy()  # (T, 4)
     decoded = viterbi_neural_bm(bm_np, trellis, index_table)
     print(f"Decoded bits shape:   {decoded.shape}")
     assert decoded.shape == (K_INFO,)
 
     # 4. make_decoder_n2 interface
-    decode_fn = make_decoder_n2(model, 'cpu', trellis, index_table)
+    decode_fn = make_decoder_n2(model, device, trellis, index_table)
     result = decode_fn(received, 16.0, 0.0, 5.0, 5.0)
     assert result.shape == (K_INFO,), f"decode_fn output shape wrong: {result.shape}"
     print(f"make_decoder_n2 output shape: {result.shape}")
@@ -736,7 +759,7 @@ if __name__ == "__main__":
 
     if args.train:
         print("\n=== Starting Training ===")
-        cfg = {**DEFAULT_CONFIG, 'hidden_size': args.hidden_size}
+        cfg = {**DEFAULT_CONFIG, 'hidden_size': args.hidden_size, 'device': device}
         trained = train_neural_bm(cfg, seed=args.seed)
         n_p = sum(p.numel() for p in trained.parameters())
         print(f"Training complete. Model params: {n_p:,}")
