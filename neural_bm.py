@@ -6,7 +6,6 @@ Phase 2b: BiGRU branch metric estimator + Viterbi integration.
 Architecture:
   Input:   (batch, T, 2)  — T=262 trellis steps, 2 received samples per step
   BiGRU:   h=16/dir, 1 layer → (batch, T, 32)
-  BatchNorm1d(32)           → (batch, T, 32)
   Linear(32, 4)             → (batch, T, 4)  branch metric scores
 
 The 4 output channels correspond to the 4 possible BPSK output pairs:
@@ -161,8 +160,8 @@ class NeuralBranchMetric(nn.Module):
             batch_first=True,
             bidirectional=True,
         )
-        # BN on the 2*h feature dimension
-        self.bn = nn.BatchNorm1d(2 * hidden_size)
+        # Batch norm disabled; keep an identity layer so the interface stays stable.
+        self.bn = nn.Identity()
         self.linear = nn.Linear(2 * hidden_size, num_branch_outputs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -176,8 +175,7 @@ class NeuralBranchMetric(nn.Module):
         # BiGRU: (batch, T, 2) → (batch, T, 2*h)
         gru_out, _ = self.bigru(x)
 
-        # BatchNorm over feature dim: transpose to (batch, 2h, T), apply, transpose back
-        bn_out = self.bn(gru_out.transpose(1, 2)).transpose(1, 2)  # (batch, T, 2*h)
+        bn_out = self.bn(gru_out)  # (batch, T, 2*h)
 
         # Linear head per time step: (batch, T, num_branch_outputs)
         return self.linear(bn_out)
