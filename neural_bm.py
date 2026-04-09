@@ -687,6 +687,27 @@ if __name__ == "__main__":
     parser.add_argument('--train', action='store_true', help='Run full training loop')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--hidden_size', type=int, default=16, help='GRU hidden size per direction')
+    parser.add_argument('--num_epochs', type=int, default=None, help='Number of training epochs')
+    parser.add_argument('--batches_per_epoch', type=int, default=None, help='Mini-batches per epoch')
+    parser.add_argument('--batch_size', type=int, default=None, help='Training batch size')
+    parser.add_argument('--val_every', type=int, default=None, help='Run validation every N epochs')
+    parser.add_argument('--val_blocks', type=int, default=None, help='Validation blocks per evaluation')
+    parser.add_argument(
+        '--snr_range',
+        type=float,
+        nargs=2,
+        metavar=('SNR_MIN', 'SNR_MAX'),
+        default=None,
+        help='Training SNR range in dB',
+    )
+    parser.add_argument(
+        '--inr_range',
+        type=float,
+        nargs=2,
+        metavar=('INR_MIN', 'INR_MAX'),
+        default=None,
+        help='Training INR range in dB',
+    )
     parser.add_argument(
         '--device',
         type=str,
@@ -771,7 +792,25 @@ if __name__ == "__main__":
 
     if args.train:
         print("\n=== Starting Training ===")
-        cfg = {**DEFAULT_CONFIG, 'hidden_size': args.hidden_size, 'device': device}
+        cfg = {
+            **DEFAULT_CONFIG,
+            'hidden_size': args.hidden_size,
+            'device': device,
+        }
+        if args.num_epochs is not None:
+            cfg['num_epochs'] = args.num_epochs
+        if args.batches_per_epoch is not None:
+            cfg['batches_per_epoch'] = args.batches_per_epoch
+        if args.batch_size is not None:
+            cfg['batch_size'] = args.batch_size
+        if args.val_every is not None:
+            cfg['val_every'] = args.val_every
+        if args.val_blocks is not None:
+            cfg['val_blocks'] = args.val_blocks
+        if args.snr_range is not None:
+            cfg['snr_range'] = tuple(args.snr_range)
+        if args.inr_range is not None:
+            cfg['inr_range'] = tuple(args.inr_range)
         trained, history = train_neural_bm(cfg, seed=args.seed)
         n_p = sum(p.numel() for p in trained.parameters())
         print(f"Training complete. Model params: {n_p:,}")
