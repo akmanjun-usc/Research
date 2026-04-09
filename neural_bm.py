@@ -546,6 +546,16 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
     epochs_no_improve = 0
     best_model_state = None
 
+    history: dict = {
+        'train_mse': [],          # one value per epoch
+        'train_mse_h0': [],       # per-hypothesis, one value per epoch
+        'train_mse_h1': [],
+        'train_mse_h2': [],
+        'train_mse_h3': [],
+        'val_bler': [],           # one value per validation epoch
+        'val_epoch': [],          # which epoch the val_bler was recorded at
+    }
+
     for epoch in range(config['num_epochs']):
         model.train()
         epoch_mse = 0.0
@@ -585,11 +595,19 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
         epoch_mse_per_hyp /= batches_per_epoch
         scheduler.step()
 
+        history['train_mse'].append(epoch_mse)
+        history['train_mse_h0'].append(float(epoch_mse_per_hyp[0]))
+        history['train_mse_h1'].append(float(epoch_mse_per_hyp[1]))
+        history['train_mse_h2'].append(float(epoch_mse_per_hyp[2]))
+        history['train_mse_h3'].append(float(epoch_mse_per_hyp[3]))
+
         # Periodic BLER validation
         if (epoch + 1) % config['val_every'] == 0 or epoch == config['num_epochs'] - 1:
             val_bler = _validate_bler(model, trellis, index_table, config, rng, device)
-            print(f"Epoch {epoch+1:3d} | train_mse={epoch_mse:.4f} | val_bler={val_bler:.4f}")
+            history['val_bler'].append(val_bler)
+            history['val_epoch'].append(epoch + 1)
 
+            print(f"Epoch {epoch+1:3d} | train_mse={epoch_mse:.4f} | val_bler={val_bler:.4f}")
             hyp_str = "  ".join(f"h{j}={epoch_mse_per_hyp[j]:.4f}" for j in range(4))
             print(f"  [train_mse/hyp] {hyp_str}")
 
@@ -622,7 +640,22 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    return model
+    # Save training history
+    log_dir = Path(config['checkpoint_dir']).parent / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        log_dir / f"history_seed{seed}.npz",
+        train_mse=np.array(history['train_mse']),
+        train_mse_h0=np.array(history['train_mse_h0']),
+        train_mse_h1=np.array(history['train_mse_h1']),
+        train_mse_h2=np.array(history['train_mse_h2']),
+        train_mse_h3=np.array(history['train_mse_h3']),
+        val_bler=np.array(history['val_bler']),
+        val_epoch=np.array(history['val_epoch']),
+    )
+    print(f"History saved to {log_dir / f'history_seed{seed}.npz'}")
+
+    return model, history
 
 
 # ─────────────────────────────────────────────
@@ -741,6 +774,6 @@ if __name__ == "__main__":
     if args.train:
         print("\n=== Starting Training ===")
         cfg = {**DEFAULT_CONFIG, 'hidden_size': args.hidden_size, 'device': device}
-        trained = train_neural_bm(cfg, seed=args.seed)
+        trained, history = train_neural_bm(cfg, seed=args.seed)
         n_p = sum(p.numel() for p in trained.parameters())
         print(f"Training complete. Model params: {n_p:,}")
