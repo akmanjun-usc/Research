@@ -547,6 +547,19 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
     epochs_no_improve = 0
     best_model_state = None
 
+    # Fixed diagnostic batch — same channel params every epoch so the
+    # predicted-vs-oracle comparison is consistent across training.
+    _diag_rng = np.random.default_rng(0)
+    _diag_batch, _diag_oracle = _generate_training_batch(
+        batch_size=64,
+        snr_db=5.0,
+        inr_db=5.0,
+        period_range=config['period_range'],
+        trellis=trellis,
+        rng=_diag_rng,
+        device=device,
+    )
+
     for epoch in range(config['num_epochs']):
         model.train()
         epoch_mse = 0.0
@@ -586,6 +599,18 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
         if (epoch + 1) % config['val_every'] == 0 or epoch == config['num_epochs'] - 1:
             val_bler = _validate_bler(model, trellis, index_table, config, rng, device)
             print(f"Epoch {epoch+1:3d} | train_mse={epoch_mse:.4f} | val_bler={val_bler:.4f}")
+
+            model.eval()
+            with torch.no_grad():
+                _diag_pred = model(_diag_batch)                              # (64, T, 4)
+            pred_np   = _diag_pred.cpu().numpy().reshape(-1, 4)             # (64*T, 4)
+            oracle_np = _diag_oracle.cpu().numpy().reshape(-1, 4)           # (64*T, 4)
+            for j in range(4):
+                mae = float(np.mean(np.abs(pred_np[:, j] - oracle_np[:, j])))
+                p, o = pred_np[:, j], oracle_np[:, j]
+                corr = float(np.corrcoef(p, o)[0, 1]) if p.std() > 1e-8 else 0.0
+                print(f"  [metric cmp] hypothesis {j}: MAE={mae:6.3f}  corr={corr:+.3f}")
+            model.train()
 
             if val_bler < best_val_bler:
                 best_val_bler = val_bler
