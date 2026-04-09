@@ -72,6 +72,7 @@ def encoder(trellis):
 def awgn_model(trellis):
     """Return trained or load cached AWGN-only model."""
     if CHECKPOINT_PATH.exists():
+        print(f"Loading pre-trained AWGN model from {CHECKPOINT_PATH}...")
         model, _ = load_model(CHECKPOINT_PATH)
         return model
     # Train a small model quickly
