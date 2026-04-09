@@ -493,10 +493,10 @@ DEFAULT_CONFIG: dict = {
     'num_epochs': 200,
     'patience': 20,
     'snr_range': (0.0, 10.0),
-    'inr_range': (-5.0, -5.0),  # default to fixed INR (amplitude) for simplicity
+    'inr_range': (-5.0, 15.0),
     'period_range': (8, 32),
     'val_snr': 5.0,
-    'val_inr': -5.0,
+    'val_inr': 5.0,
     'val_blocks': 1000,
     'val_every': 5,
     'checkpoint_dir': 'results/phase2b/checkpoints',
