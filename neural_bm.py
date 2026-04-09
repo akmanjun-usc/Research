@@ -393,14 +393,17 @@ def _generate_training_batch(
     batch_size: int,
     snr_db: float,
     inr_db: float,
-    period: float,
-    phase: float,
+    period_range: tuple[int, int],
     trellis: Trellis,
     rng: np.random.Generator,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generate one training batch on-the-fly.
+
+    SNR and INR are shared across the batch (noise power and interference
+    amplitude are fixed). Period and phase are drawn independently per block
+    to match the evaluation distribution.
 
     Returns:
         y_paired:       (batch, T, 2) float32 tensor — received samples paired
@@ -414,6 +417,9 @@ def _generate_training_batch(
     interf_list: list[np.ndarray] = []
 
     for _ in range(batch_size):
+        period = float(rng.integers(period_range[0], period_range[1] + 1))
+        phase = float(rng.uniform(0.0, 2.0 * np.pi))
+
         info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
         coded = _encode_fixed_tail(info_bits, trellis)   # always 524 bits
         symbols = bpsk_modulate(coded)
@@ -485,7 +491,7 @@ DEFAULT_CONFIG: dict = {
     'lr_decay_factor': 0.5,
     'lr_decay_every': 50,
     'batch_size': 256,
-    'batches_per_epoch': 10,
+    'batches_per_epoch': 200,
     'num_epochs': 200,
     'patience': 20,
     'grad_clip': 1.0,
@@ -547,17 +553,23 @@ def train_neural_bm(config: dict, seed: int = 42) -> NeuralBranchMetric:
         model.train()
         epoch_mse = 0.0
 
-        for _ in range(batches_per_epoch):
+        for batch_idx in range(batches_per_epoch):
             # Sample channel params fresh for each mini-batch
             snr_db = float(rng.uniform(config['snr_range'][0], config['snr_range'][1]))
             inr_db = float(rng.uniform(config['inr_range'][0], config['inr_range'][1]))
-            period = float(rng.integers(config['period_range'][0], config['period_range'][1] + 1))
-            phase = float(rng.uniform(0.0, 2.0 * np.pi))
 
             y_batch, oracle = _generate_training_batch(
-                config['batch_size'], snr_db, inr_db, period, phase,
+                config['batch_size'], snr_db, inr_db, config['period_range'],
                 trellis, rng, device,
             )
+
+            if epoch == 0 and batch_idx == 0:
+                with torch.no_grad():
+                    print(
+                        f"  [diagnostic] oracle metrics — "
+                        f"mean={oracle.mean():.3f}  std={oracle.std():.3f}  "
+                        f"min={oracle.min():.3f}  max={oracle.max():.3f}"
+                    )
 
             pred = model(y_batch)            # (batch, T, 4)
             loss = criterion(pred, oracle)
