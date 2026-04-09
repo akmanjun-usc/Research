@@ -34,7 +34,7 @@ from eval import estimate_bler, make_encoder, make_decoder_b1
 from channel import awgn_channel
 from trellis import load_nasa_k7
 
-CHECKPOINT_PATH = Path("results/phase2b/checkpoints/awgn_test_model.pt")
+CHECKPOINT_PATH = Path("results/phase2b/checkpoints/best_model_seed42.pt")
 
 AWGN_TRAIN_CONFIG = {
     **DEFAULT_CONFIG,
