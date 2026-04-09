@@ -448,7 +448,11 @@ def run_phase2a(
         device: torch device (auto-detect if empty)
     """
     import torch
-    from neural_decoder import load_model, make_decoder_n1
+    # from neural_decoder import load_model as load_n1, make_decoder_n1  # N1 not trained yet
+    from neural_bm import (
+        load_model as load_n2_model, make_decoder_n2,
+        build_branch_output_index,
+    )
     from compute_cost import (
         count_flops_birnn_analytical, count_flops_neural,
     )
@@ -460,29 +464,36 @@ def run_phase2a(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Default checkpoint path
-    if checkpoint_path is None:
-        checkpoint_path = str(
-            Path(__file__).parent / "results" / "phase2a" / "checkpoints" / "best_gru.pt"
-        )
+    # N1 checkpoint (unused — N1 not trained yet)
+    # if checkpoint_path is None:
+    #     checkpoint_path = str(
+    #         Path(__file__).parent / "results" / "phase2a" / "checkpoints" / "best_gru.pt"
+    #     )
+
+    n2_checkpoint_path = str(
+        Path(__file__).parent / "results" / "phase2b" / "checkpoints" / "best_model_seed42.pt"
+    )
 
     print("=" * 60)
-    print("Phase 2a: Neural Decoder Evaluation")
+    print("Phase 2a/2b: Neural Decoder Evaluation")
     print(f"  INR = {inr_db} dB, n_trials = {n_trials}, device = {device}")
-    print(f"  Checkpoint: {checkpoint_path}")
+    print(f"  N2 Checkpoint: {n2_checkpoint_path}")
     print("=" * 60)
 
-    # Load model
-    model = load_model(checkpoint_path, device=device)
+    # Load N2 model
+    n2_model, _ = load_n2_model(n2_checkpoint_path)
 
     # Build methods
     trellis = load_nasa_k7()
     encode_fn = make_encoder(trellis)
 
+    index_table = build_branch_output_index(trellis)
     methods = {
         'B1_mismatched_viterbi': (encode_fn, make_decoder_b1(trellis)),
-        'B2_oracle_viterbi': (encode_fn, make_decoder_b2(trellis)),
-        'B5_interference_cancel': (encode_fn, make_decoder_b5(trellis)),
-        'N1_gru_e2e': (encode_fn, make_decoder_n1(model, device=device)),
+        'B2_oracle_viterbi':     (encode_fn, make_decoder_b2(trellis)),
+        'B5_interference_cancel':(encode_fn, make_decoder_b5(trellis)),
+        'N2_neural_bm':          (encode_fn, make_decoder_n2(n2_model, device, trellis, index_table)),
+        # 'N1_gru_e2e':          (encode_fn, make_decoder_n1(model, device=device)),  # not trained yet
     }
 
     # Results directories
@@ -530,10 +541,14 @@ def run_phase2a(
     print("\nCompute Cost Table:")
     viterbi_flops = count_flops_viterbi(N_STATES, N_CODED)
     ic_viterbi_flops = count_flops_ic_viterbi(N_STATES, N_CODED)
-    gru_flops = count_flops_birnn_analytical(
-        hidden_size=24, input_dim=2, seq_len=262,
+    n2_flops = count_flops_birnn_analytical(
+        hidden_size=16, input_dim=2, seq_len=262,
         cell_type="GRU", bidirectional=True,
     )
+    # gru_flops = count_flops_birnn_analytical(  # N1 — not used yet
+    #     hidden_size=24, input_dim=2, seq_len=262,
+    #     cell_type="GRU", bidirectional=True,
+    # )
 
     def get_bler_at_snr(pts, target_snr=5.0):
         for p in pts:
@@ -554,10 +569,14 @@ def run_phase2a(
             'flops': ic_viterbi_flops, 'latency_ms': 0.0,
             'bler_at_5db': get_bler_at_snr(results['B5_interference_cancel']),
         },
-        'N1_gru_e2e': {
-            'flops': gru_flops, 'latency_ms': 0.0,
-            'bler_at_5db': get_bler_at_snr(results['N1_gru_e2e']),
+        'N2_neural_bm': {
+            'flops': n2_flops, 'latency_ms': 0.0,
+            'bler_at_5db': get_bler_at_snr(results['N2_neural_bm']),
         },
+        # 'N1_gru_e2e': {  # not trained yet
+        #     'flops': gru_flops, 'latency_ms': 0.0,
+        #     'bler_at_5db': get_bler_at_snr(results['N1_gru_e2e']),
+        # },
     }
 
     # Measure latency
@@ -581,7 +600,8 @@ def run_phase2a(
     assert_within_budget("B1_mismatched_viterbi", viterbi_flops)
     assert_within_budget("B2_oracle_viterbi", viterbi_flops)
     assert_within_budget("B5_interference_cancel", ic_viterbi_flops)
-    assert_within_budget("N1_gru_e2e", gru_flops)
+    assert_within_budget("N2_neural_bm", n2_flops)
+    # assert_within_budget("N1_gru_e2e", gru_flops)  # not trained yet
 
     # Save compute table
     with open(phase2a_dir / "compute_table_phase2a.md", 'w') as f:
@@ -590,14 +610,22 @@ def run_phase2a(
     # dB gain
     from plot_utils import db_gain
     try:
-        snr_n1 = np.array([p['snr_db'] for p in results['N1_gru_e2e']])
-        bler_n1 = np.array([p['bler'] for p in results['N1_gru_e2e']])
+        snr_n2 = np.array([p['snr_db'] for p in results['N2_neural_bm']])
+        bler_n2 = np.array([p['bler'] for p in results['N2_neural_bm']])
         snr_b1 = np.array([p['snr_db'] for p in results['B1_mismatched_viterbi']])
         bler_b1 = np.array([p['bler'] for p in results['B1_mismatched_viterbi']])
-        gain = db_gain(1e-3, snr_n1, bler_n1, snr_b1, bler_b1)
-        print(f"\nN1 vs B1 gain at BLER=1e-3: {gain:.2f} dB")
+        gain = db_gain(1e-3, snr_n2, bler_n2, snr_b1, bler_b1)
+        print(f"\nN2 vs B1 gain at BLER=1e-3: {gain:.2f} dB")
     except Exception as e:
         print(f"\nCould not compute dB gain: {e}")
+    # N1 gain — not computed yet (model not trained)
+    # try:
+    #     snr_n1 = np.array([p['snr_db'] for p in results['N1_gru_e2e']])
+    #     bler_n1 = np.array([p['bler'] for p in results['N1_gru_e2e']])
+    #     gain = db_gain(1e-3, snr_n1, bler_n1, snr_b1, bler_b1)
+    #     print(f"\nN1 vs B1 gain at BLER=1e-3: {gain:.2f} dB")
+    # except Exception as e:
+    #     print(f"\nCould not compute dB gain: {e}")
 
     print(f"\nResults saved to: {phase2a_dir}")
     print(f"Figures saved to: {fig_dir}")
