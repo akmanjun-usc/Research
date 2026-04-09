@@ -283,6 +283,28 @@ def _save_method_results(
     )
 
 
+def _load_snr_sweep(npz_path: Path) -> list[dict]:
+    """Load a saved SNR sweep .npz as a list of estimate_bler-style dicts."""
+    d = np.load(npz_path)
+    return [
+        dict(snr_db=float(d['snr_db'][i]), bler=float(d['bler'][i]),
+             ci_95=float(d['ci_95'][i]), n_errors=int(d['n_errors'][i]),
+             n_trials=int(d['n_trials'][i]), inr_db=float(d['inr_db']))
+        for i in range(len(d['snr_db']))
+    ]
+
+
+def _load_inr_sweep(npz_path: Path) -> list[dict]:
+    """Load a saved INR sweep .npz as a list of estimate_bler-style dicts."""
+    d = np.load(npz_path)
+    return [
+        dict(inr_db=float(d['inr_db'][i]), bler=float(d['bler'][i]),
+             ci_95=float(d['ci_95'][i]), n_errors=int(d['n_errors'][i]),
+             n_trials=int(d['n_trials'][i]), snr_db=float(d['snr_db']))
+        for i in range(len(d['inr_db']))
+    ]
+
+
 # ─────────────────────────────────────────────
 # Phase 1 main evaluation
 # ─────────────────────────────────────────────
@@ -497,16 +519,25 @@ def run_phase2a(
     }
 
     # Results directories
-    phase2a_dir = RESULTS_DIR / "phase2a"
-    fig_dir = phase2a_dir / "figures"
+    phase1_dir = RESULTS_DIR / "phase1"
+    phase2b_dir = RESULTS_DIR / "phase2b"
+    fig_dir = phase2b_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── SNR sweep ──
-    print("\nSNR Sweep:")
-    results = sweep_snr(
-        methods, snr_range, inr_db, n_trials,
-        results_dir=phase2a_dir, tag="bler", seed=seed,
+    # ── SNR sweep — load B1/B2/B5 from disk, only run N2 ──
+    print("\nLoading Phase 1 SNR sweep results from disk...")
+    results = {
+        'B1_mismatched_viterbi':  _load_snr_sweep(phase1_dir / f"bler_B1_mismatched_viterbi_inr{inr_db:.0f}dB.npz"),
+        'B2_oracle_viterbi':      _load_snr_sweep(phase1_dir / f"bler_B2_oracle_viterbi_inr{inr_db:.0f}dB.npz"),
+        'B5_interference_cancel': _load_snr_sweep(phase1_dir / f"bler_B5_interference_cancel_inr{inr_db:.0f}dB.npz"),
+    }
+    print("Running N2 SNR sweep...")
+    n2_snr = sweep_snr(
+        {'N2_neural_bm': methods['N2_neural_bm']},
+        snr_range, inr_db, n_trials,
+        results_dir=phase2b_dir, tag="bler", seed=seed,
     )
+    results['N2_neural_bm'] = n2_snr['N2_neural_bm']
 
     # Add theory curve
     snr_lin = 10 ** (snr_range / 10)
@@ -519,22 +550,30 @@ def run_phase2a(
 
     plot_bler_vs_snr(
         results, inr_db=inr_db,
-        save_path=fig_dir / "phase2a_bler_vs_snr",
-        title="Phase 2a: Neural vs Classical",
+        save_path=fig_dir / "phase2b_bler_vs_snr",
+        title="Phase 2b: N2 vs Classical",
     )
 
-    # ── INR sweep ──
+    # ── INR sweep — load B1/B2/B5 from disk, only run N2 ──
     inr_range = np.arange(-5, 15.01, 2.5)
     snr_fixed = 5.0
-    print(f"\nINR Sweep: SNR = {snr_fixed} dB")
-    inr_results = sweep_inr(
-        methods, inr_range, snr_db=snr_fixed, n_trials=n_trials,
-        results_dir=phase2a_dir, tag="bler_inr", seed=seed,
+    print(f"\nLoading Phase 1 INR sweep results from disk...")
+    inr_results = {
+        'B1_mismatched_viterbi':  _load_inr_sweep(phase1_dir / f"bler_inr_B1_mismatched_viterbi_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+        'B2_oracle_viterbi':      _load_inr_sweep(phase1_dir / f"bler_inr_B2_oracle_viterbi_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+        'B5_interference_cancel': _load_inr_sweep(phase1_dir / f"bler_inr_B5_interference_cancel_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+    }
+    print(f"Running N2 INR sweep: SNR = {snr_fixed} dB")
+    n2_inr = sweep_inr(
+        {'N2_neural_bm': methods['N2_neural_bm']},
+        inr_range, snr_db=snr_fixed, n_trials=n_trials,
+        results_dir=phase2b_dir, tag="bler_inr", seed=seed,
     )
+    inr_results['N2_neural_bm'] = n2_inr['N2_neural_bm']
 
     plot_bler_vs_inr(
         inr_results, snr_db=snr_fixed,
-        save_path=fig_dir / "phase2a_bler_vs_inr",
+        save_path=fig_dir / "phase2b_bler_vs_inr",
     )
 
     # ── Compute cost table ──
