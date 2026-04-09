@@ -41,7 +41,7 @@ AWGN_TRAIN_CONFIG = {
     'hidden_size': 16,
     'batch_size': 64,
     'batches_per_epoch': 5,
-    'num_epochs': 30,
+    'num_epochs': 100,
     'patience': 10,
     'val_every': 5,
     'val_blocks': 200,
