@@ -100,13 +100,15 @@ def test_mse_decreases_on_fixed_batch(fixed_batch) -> None:
 
     losses: list[float] = []
     model.train()
-    for _ in range(N_STEPS):
+    for step in range(N_STEPS):
         pred = model(y_batch)
         loss = criterion(pred, oracle)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
+        if (step + 1) % 5 == 0:
+            print(f"  step {step+1:>3d}/{N_STEPS}  MSE={loss.item():.4f}")
 
     first_avg = float(np.mean(losses[:20]))
     last_avg = float(np.mean(losses[-20:]))
@@ -145,6 +147,8 @@ def test_overfit_mse_and_accuracy(fixed_batch, trellis, index_table) -> None:
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if (step + 1) % 5 == 0:
+            print(f"  step {step+1:>3d}/{N_STEPS}  MSE={loss.item():.4f}")
 
     model.eval()
     with torch.no_grad():
