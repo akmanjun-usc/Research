@@ -215,22 +215,21 @@ def pair_received_signal(y_flat: np.ndarray) -> np.ndarray:
 def compute_oracle_metrics(
     y_paired: torch.Tensor,
     interference_paired: torch.Tensor,
-    noise_sigma: float | torch.Tensor,
 ) -> torch.Tensor:
     """
-    Compute ground-truth oracle branch metrics for all 4 BPSK hypotheses.
+    Compute unnormalized oracle branch metrics for all 4 BPSK hypotheses.
 
     For hypothesis h_j ∈ BPSK_PAIRS:
-        oracle[b, t, j] = −‖ y[b,t] − h_j − interf[b,t] ‖² / (2σ²)
+        oracle[b, t, j] = −‖ y[b,t] − h_j − interf[b,t] ‖²
 
-    This is the log-likelihood of observing y given that hypothesis h_j was
-    transmitted and the true interference is known.  The NN learns to
-    approximate these metrics without access to the interference.
+    Returns unnormalized negative squared distances. The σ² scaling is applied
+    externally at inference time (deterministic from SNR) rather than baked into
+    the regression target — this keeps training targets on a consistent scale
+    across the full SNR training distribution.
 
     Args:
         y_paired:            (batch, T, 2) float32
         interference_paired: (batch, T, 2) float32  — true interference
-        noise_sigma:         scalar or (batch,) float — noise std deviation
 
     Returns:
         oracle_metrics: (batch, T, 4) float32
@@ -247,12 +246,7 @@ def compute_oracle_metrics(
     diff = r.unsqueeze(2) - pairs[None, None, :, :]
     sq_norm = (diff * diff).sum(dim=-1)  # (batch, T, 4)
 
-    if isinstance(noise_sigma, torch.Tensor):
-        sigma2 = (noise_sigma ** 2).view(-1, 1, 1)
-    else:
-        sigma2 = float(noise_sigma) ** 2
-
-    return -sq_norm / (2.0 * sigma2)
+    return -sq_norm
 
 
 # ─────────────────────────────────────────────
@@ -378,6 +372,8 @@ def make_decoder_n2(
             nn_out = model(x)  # (1, T, 4)
 
         bm = nn_out.squeeze(0).cpu().numpy()  # (T, 4)
+        noise_var = noise_var_from_snr(snr_db)
+        bm = bm / (2.0 * float(noise_var))
         return viterbi_neural_bm(bm, trellis, index_table)
 
     return decode_fn
@@ -431,7 +427,7 @@ def _generate_training_batch(
 
     y_batch = torch.tensor(np.stack(y_list), dtype=torch.float32, device=device)
     interf_batch = torch.tensor(np.stack(interf_list), dtype=torch.float32, device=device)
-    oracle = compute_oracle_metrics(y_batch, interf_batch, noise_sigma)
+    oracle = compute_oracle_metrics(y_batch, interf_batch)
 
     return y_batch, oracle
 
@@ -469,6 +465,8 @@ def _validate_bler(
             y_paired = pair_received_signal(received)   # (T, 2)
             x = torch.tensor(y_paired, dtype=torch.float32, device=device).unsqueeze(0)
             bm = model(x).squeeze(0).cpu().numpy()      # (T, 4)
+            noise_var = noise_var_from_snr(val_snr)
+            bm = bm / (2.0 * float(noise_var))
 
             decoded = viterbi_neural_bm(bm, trellis, index_table)
             if not np.array_equal(decoded, info_bits):
@@ -752,7 +750,7 @@ if __name__ == "__main__":
 
     y_t = torch.tensor(y_paired[np.newaxis], dtype=torch.float32, device=device)   # (1, T, 2)
     i_t = torch.tensor(i_paired[np.newaxis], dtype=torch.float32, device=device)   # (1, T, 2)
-    oracle = compute_oracle_metrics(y_t, i_t, float(np.sqrt(noise_var)))
+    oracle = compute_oracle_metrics(y_t, i_t)
     print(f"Oracle metrics shape: {tuple(oracle.shape)}")
     assert oracle.shape == (1, T, 4)
 

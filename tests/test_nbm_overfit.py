@@ -83,7 +83,7 @@ def fixed_batch(trellis):
 
     y_batch = torch.tensor(np.stack(y_list), dtype=torch.float32)        # (B, T, 2)
     interf_batch = torch.tensor(np.stack(interf_list), dtype=torch.float32)
-    oracle = compute_oracle_metrics(y_batch, interf_batch, noise_sigma)  # (B, T, 4)
+    oracle = compute_oracle_metrics(y_batch, interf_batch)  # (B, T, 4)
 
     return y_batch, oracle, bits_list
 
@@ -123,10 +123,10 @@ def test_overfit_mse_and_accuracy(fixed_batch, trellis, index_table) -> None:
     """
     After overfitting on the fixed batch:
       1. MSE must drop to < 1% of initial MSE (relative convergence).
-         Oracle metrics are log-likelihoods ∝ 1/(2σ²); at SNR=10 dB the
-         correct hypothesis scores ≈ −1 while wrong ones score ≈ −40 to −80,
-         so the initial MSE (random model ≈ 0 output) can be in the thousands.
-         An absolute threshold of < 0.1 is unreachable; relative is correct.
+         Oracle metrics are unnormalized negative squared distances (−‖r‖²);
+         at SNR=10 dB the correct hypothesis scores are O(1) while wrong ones
+         are O(10)–O(100), so initial MSE (random model ≈ 0 output) can be
+         large. An absolute threshold is unreliable; relative is correct.
       2. Viterbi with predicted metrics must decode > 70% of bits correctly.
          Even imperfect absolute metric values can yield correct rankings, so
          70% is a meaningful lower bound that verifies integration is working.
