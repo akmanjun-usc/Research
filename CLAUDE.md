@@ -53,6 +53,7 @@ project/
 ├── eval.py             # Monte Carlo BLER, SNR/INR sweeps, Phase 1 runner
 ├── compute_cost.py     # FLOPs/latency profiler (applies to ALL methods)
 ├── plot_utils.py       # IEEE-style figures, Paul Tol palette, BLER curves
+├── plot_training_history.py  # [Phase 2b] Plot training/validation loss curves
 ├── neural_decoder.py   # [Phase 2a] BiRNNDecoder (BiGRU, final-hidden-state pooling), training loop, decode fn
 ├── neural_bm.py        # [Phase 2b] Neural branch metric estimator + Viterbi integration
 ├── search.py           # [Phase 3] Evolutionary/SA trellis search — not yet created
@@ -86,7 +87,7 @@ project/
 
 ---
 
-## Current Repo Snapshot (2026-04-08)
+## Current Repo Snapshot (2026-04-10)
 
 **Git state:** clean working tree.
 
@@ -94,13 +95,25 @@ project/
 - Phase 1 baseline code, figures, `.npz` sweep outputs, and `results/phase1/compute_table.md` are checked in.
 - Phase 2a code is present in `neural_decoder.py`; `results/phase2a/checkpoints/` and `results/phase2a/logs/` exist but are empty.
 - Phase 2b code is present in `neural_bm.py` and the associated tests exist under `tests/`.
-- One Phase 2b checkpoint is checked in: `results/phase2b/checkpoints/best_model_seed99.pt`.
-- No Phase 2b logs or figures are currently checked in.
+- Three Phase 2b checkpoints are checked in: `results/phase2b/checkpoints/best_model_seed42.pt`, `best_model_seed32.pt`, and `best_model_seed99.pt` (legacy).
+- Phase 2b results are generated and checked in for both seed42 and seed32 models:
+  - BLER vs SNR curves (`phase2b_bler_vs_snr_seed{42,32}.{pdf,png}`)
+  - BLER vs INR curves (`phase2b_bler_vs_inr_seed{42,32}.{pdf,png}`)
+  - Training history plots (`training_history_seed{42,32}.{pdf,png}`)
+  - Raw `.npz` data for both sweeps and both seeds
+  - Training/validation logs (`history_seed{42,32}.npz`)
+
+**Two model variants (Phase 2b):**
+
+| Seed | Oracle metric target | σ² normalization | Description |
+|------|---------------------|-----------------|-------------|
+| seed42 | −‖y−h−i‖² / (2σ²) | Baked into training target | NN must learn both oracle distance and noise variance scaling |
+| seed32 | −‖y−h−i‖² (unnormalized) | Applied post-inference: `bm / (2σ²)` | NN learns only oracle distance; deterministic σ² scaling applied externally at decode time |
+
+The seed32 variant (external normalization) is the current default in `neural_bm.py` — `compute_oracle_metrics()` returns unnormalized distances, and `make_decoder_n2()` divides by `2σ²` after the NN forward pass.
 
 **Important repo-level status notes:**
-- The Phase 2b tests `tests/test_nbm_vs_b1.py` currently look for `best_model_seed42.pt`, but the committed checkpoint is `best_model_seed99.pt`.
 - `search.py` and `fitness.py` are still not present; trellis search has not started.
-- `pytest` was not available on the current shell path during this documentation update, so the status below is based on repository contents rather than a fresh full test run.
 
 ---
 
@@ -425,17 +438,18 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
   - [x] MSE loss on oracle metrics
   - [x] BLER-based validation
   - [x] Early stopping and checkpoint save/load
-  - [ ] Persisted training logs are not currently checked in
+  - [x] Training logs checked in (`results/phase2b/logs/history_seed{42,32}.npz`)
+  - [x] Two model variants trained: seed42 (σ²-normalized targets) and seed32 (unnormalized targets, external σ² scaling)
 - [x] **Step 3 — Test files implemented**
   - [x] `test_nbm_ops.py`
   - [x] `test_nbm_overfit.py`
   - [x] `test_nbm_awgn.py`
   - [x] `test_nbm_vs_b1.py`
-  - [ ] Current repo status does not confirm a fresh passing run for the full Phase 2b suite
-  - [ ] `test_nbm_vs_b1.py` expects `best_model_seed42.pt`, but the committed checkpoint is `best_model_seed99.pt`
-- [ ] **Step 4 — Evaluation incomplete**
-  - [ ] BLER vs SNR curves (N2, B1, B2, B5) not checked in
-  - [ ] BLER vs INR curves not checked in
+- [x] **Step 4 — Evaluation results generated**
+  - [x] BLER vs SNR curves (N2, B1, B2, B5) for both seed42 and seed32
+  - [x] BLER vs INR curves for both seed42 and seed32
+  - [x] Training history plots for both seeds
+  - [x] Raw `.npz` sweep data checked in
   - [ ] Compute cost table for N2 not checked in
   - [ ] Distribution shift tests not implemented
 - [ ] **Step 5 — Ablations incomplete**
@@ -443,10 +457,12 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
   - [ ] Visualize learned vs oracle metrics
 
 **Artifacts currently committed for N2:**
-- `results/phase2b/checkpoints/best_model_seed99.pt`
-
-**Immediate next cleanup item:**
-- Align the Phase 2b checkpoint naming and test assumptions so `test_nbm_vs_b1.py` and any related evaluation scripts target the checkpoint that actually exists in the repo.
+- `results/phase2b/checkpoints/best_model_seed42.pt` — NN learns oracle_distance/σ² (normalized targets)
+- `results/phase2b/checkpoints/best_model_seed32.pt` — NN learns oracle_distance only (σ² applied externally)
+- `results/phase2b/checkpoints/best_model_seed99.pt` — legacy checkpoint
+- `results/phase2b/figures/` — BLER vs SNR, BLER vs INR, training history plots for both seeds
+- `results/phase2b/logs/` — training/validation history for both seeds
+- `results/phase2b/*.npz` — raw BLER sweep data for both seeds
 
 **Deliverable:** BLER curves + compute table for N2, B1, B2, B5. Evidence of robustness to distribution shift.
 
