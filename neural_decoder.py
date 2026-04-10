@@ -14,7 +14,6 @@ Architecture per CLAUDE.md:
 from __future__ import annotations
 import argparse
 import numpy as np
-import json
 import time
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -338,15 +337,22 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     log_dir = Path(config.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    ckpt_name = f"best_{config.cell_type.lower()}.pt"
-    ckpt_path = ckpt_dir / ckpt_name
-    log_path = log_dir / f"training_{config.cell_type.lower()}_h{config.hidden_size}.json"
+    seed_ckpt_path = ckpt_dir / f"best_{config.cell_type.lower()}_seed{seed}.pt"
+    history_path = log_dir / f"history_seed{seed}.npz"
 
     rng = np.random.default_rng(seed + 1)
     best_val_bler = float('inf')
     best_epoch = -1
     patience_counter = 0
-    training_log = []
+    best_model_state = None
+    history: dict[str, list[float | int]] = {
+        'train_loss': [],
+        'train_bit_acc': [],
+        'lr': [],
+        'epoch_time_s': [],
+        'val_bler': [],
+        'val_epoch': [],
+    }
 
     print(f"Training for up to {config.n_epochs} epochs "
           f"({config.batches_per_epoch} batches/epoch, batch_size={config.batch_size})")
@@ -357,6 +363,8 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     for epoch in range(config.n_epochs):
         model.train()
         epoch_loss = 0.0
+        epoch_correct_bits = 0
+        epoch_total_bits = 0
         t0 = time.time()
 
         for _ in range(config.batches_per_epoch):
@@ -377,18 +385,21 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
             optimizer.step()
 
             epoch_loss += loss.item()
+            with torch.no_grad():
+                preds = (torch.sigmoid(logits) > 0.5)
+                epoch_correct_bits += (preds == (info_bits > 0.5)).sum().item()
+                epoch_total_bits += info_bits.numel()
 
         avg_loss = epoch_loss / config.batches_per_epoch
+        train_bit_acc = epoch_correct_bits / epoch_total_bits if epoch_total_bits else 0.0
         epoch_time = time.time() - t0
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
-        entry: dict = {
-            'epoch': epoch,
-            'loss': avg_loss,
-            'lr': current_lr,
-            'time_s': epoch_time,
-        }
+        history['train_loss'].append(float(avg_loss))
+        history['train_bit_acc'].append(float(train_bit_acc))
+        history['lr'].append(float(current_lr))
+        history['epoch_time_s'].append(float(epoch_time))
 
         # Validate every val_every epochs (and always on the final epoch)
         if (epoch + 1) % config.val_every == 0 or epoch == config.n_epochs - 1:
@@ -397,46 +408,51 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
                 config.val_snr_db, config.val_inr_db, config.val_blocks,
                 device, seed=99, period_range=config.period_range,
             )
-            entry['val_bler'] = val_bler
+            history['val_bler'].append(float(val_bler))
+            history['val_epoch'].append(int(epoch + 1))
 
-            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | val_bler={val_bler:.4f} | "
-                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
+            print(f"Epoch {epoch+1:3d} | train_loss={avg_loss:.4f} | val_bler={val_bler:.4f}")
+            print(f"  [train] bit_acc={train_bit_acc:.4f}  lr={current_lr:.1e}  "
+                  f"time={epoch_time:.1f}s")
 
             if val_bler < best_val_bler:
                 best_val_bler = val_bler
-                best_epoch = epoch
+                best_epoch = epoch + 1
                 patience_counter = 0
-                torch.save({
+                best_model_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+                checkpoint = {
                     'model_state_dict': model.state_dict(),
                     'config': asdict(config),
-                    'epoch': int(epoch),
+                    'epoch': int(epoch + 1),
                     'val_bler': float(val_bler),
                     'loss': float(avg_loss),
-                }, ckpt_path)
+                    'seed': int(seed),
+                }
+                torch.save(checkpoint, seed_ckpt_path)
             else:
                 patience_counter += 1
                 if patience_counter >= config.patience:
-                    print(f"  Early stopping at epoch {epoch} "
+                    print(f"Early stopping at epoch {epoch+1} "
                           f"(patience={config.patience} rounds without improvement)")
-                    training_log.append(entry)
                     break
-        elif epoch % 10 == 0:
-            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | "
-                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
 
-        training_log.append(entry)
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
-        with open(log_path, 'w') as f:
-            json.dump(training_log, f, indent=2)
+    np.savez(
+        history_path,
+        train_loss=np.array(history['train_loss'], dtype=np.float32),
+        train_bit_acc=np.array(history['train_bit_acc'], dtype=np.float32),
+        lr=np.array(history['lr'], dtype=np.float32),
+        epoch_time_s=np.array(history['epoch_time_s'], dtype=np.float32),
+        val_bler=np.array(history['val_bler'], dtype=np.float32),
+        val_epoch=np.array(history['val_epoch'], dtype=np.int32),
+    )
 
     print("-" * 60)
     print(f"Training complete. Best val BLER: {best_val_bler:.4f} (epoch {best_epoch})")
-    print(f"Checkpoint: {ckpt_path}")
-    print(f"Log: {log_path}")
-
-    if ckpt_path.exists():
-        best = torch.load(ckpt_path, map_location=device, weights_only=True)
-        model.load_state_dict(best['model_state_dict'])
+    print(f"Seed checkpoint: {seed_ckpt_path}")
+    print(f"History saved to {history_path}")
     return model
 
 
