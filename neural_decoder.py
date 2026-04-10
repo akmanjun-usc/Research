@@ -12,6 +12,7 @@ Architecture per CLAUDE.md:
 """
 
 from __future__ import annotations
+import argparse
 import numpy as np
 import json
 import time
@@ -503,9 +504,29 @@ def load_model(
 
 
 # ─────────────────────────────────────────────
-# Smoke test
+# CLI / smoke test
 # ─────────────────────────────────────────────
-if __name__ == "__main__":
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Train or smoke-test the Phase 2a neural decoder.",
+    )
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="train the decoder instead of running the smoke test",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="random seed used for training (default: 42)",
+    )
+    return parser.parse_args()
+
+
+def _run_smoke_test() -> None:
+    """Run a lightweight sanity check for the decoder module."""
     print("Running smoke test for neural_decoder...")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -562,3 +583,13 @@ if __name__ == "__main__":
     print(f"  Validation BLER (random model, 20 blocks): {val_bler:.4f}")
 
     print("PASS")
+
+
+if __name__ == "__main__":
+    args = _parse_args()
+
+    if args.train:
+        config = TrainConfig()
+        train_model(config, seed=args.seed)
+    else:
+        _run_smoke_test()
