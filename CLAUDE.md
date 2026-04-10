@@ -565,4 +565,3 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 - Simulation code: read `.claude/skills/simulation/SKILL.md` before writing channel/trellis/decoder code
 - Evaluation: read `.claude/skills/evaluation/SKILL.md` before writing eval or compute-cost code
 - Plotting: read `.claude/skills/plotting/SKILL.md` before writing plotting or figure-generation code
-- Documentation: read `.claude/skills/documentation/SKILL.md` before writing documentation when prompted to

@@ -24,7 +24,6 @@ from torch.optim import Adam
 
 from neural_decoder import (
     BiRNNDecoder,
-    build_codeword_pool,
     generate_training_batch,
 )
 from trellis import load_nasa_k7
@@ -38,7 +37,6 @@ BATCH_SIZE   = 4        # Keep tiny so ~6.6K-param model can easily memorise
 N_EPOCHS     = 500      # Gradient steps on the same fixed batch
 LR           = 5e-3     # Learning rate
 PRINT_EVERY  = 50       # Print loss every N epochs
-POOL_SIZE    = 200      # Small pool – only need BATCH_SIZE codewords
 SEED         = 42
 
 # Fixed channel conditions: high SNR, low interference → clean signal
@@ -80,20 +78,15 @@ def main() -> None:
     print(f"  Period      : {PERIOD_FIXED}")
     print()
 
-    # ── Build a tiny codeword pool ───────────────────────────────────────────
-    print("Building codeword pool …")
     trellis = load_nasa_k7()
-    pool    = build_codeword_pool(trellis, POOL_SIZE, seed=SEED)
-    print(f"  Pool: {pool['info_bits'].shape[0]} codewords, "
-          f"symbol length = {pool['symbols'].shape[1]}")
 
     # ── Fix a single small batch (X_small, y_small) ─────────────────────────
     rng = np.random.default_rng(SEED)
     X_small, y_small = generate_training_batch(
-        pool,
+        trellis=trellis,
         batch_size=BATCH_SIZE,
-        snr_range=(SNR_DB_FIXED, SNR_DB_FIXED),
-        inr_range=(INR_DB_FIXED,  INR_DB_FIXED),
+        snr_db=SNR_DB_FIXED,
+        inr_db=INR_DB_FIXED,
         period_range=(PERIOD_FIXED, PERIOD_FIXED),
         rng=rng,
         device=device,
