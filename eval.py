@@ -492,9 +492,14 @@ def run_phase2a(
     #         Path(__file__).parent / "results" / "phase2a" / "checkpoints" / "best_gru.pt"
     #     )
 
-    n2_checkpoint_path = str(
-        Path(__file__).parent / "results" / "phase2b" / "checkpoints" / "best_model_seed42.pt"
+    n2_checkpoint_path = checkpoint_path or str(
+        Path(__file__).parent / "results" / "phase2b" / "checkpoints" / "best_model_seed32.pt"
     )
+
+    # Extract seed tag from checkpoint filename (e.g. "best_model_seed32.pt" -> "_seed32")
+    import re
+    _seed_match = re.search(r'seed(\d+)', Path(n2_checkpoint_path).stem)
+    _seed_tag = f"_seed{_seed_match.group(1)}" if _seed_match else ""
 
     print("=" * 60)
     print("Phase 2a/2b: Neural Decoder Evaluation")
@@ -550,7 +555,7 @@ def run_phase2a(
 
     plot_bler_vs_snr(
         results, inr_db=inr_db,
-        save_path=fig_dir / "phase2b_bler_vs_snr",
+        save_path=fig_dir / f"phase2b_bler_vs_snr{_seed_tag}",
         title="Phase 2b: N2 vs Classical",
     )
 
@@ -573,7 +578,7 @@ def run_phase2a(
 
     plot_bler_vs_inr(
         inr_results, snr_db=snr_fixed,
-        save_path=fig_dir / "phase2b_bler_vs_inr",
+        save_path=fig_dir / f"phase2b_bler_vs_inr{_seed_tag}",
     )
 
     # ── Compute cost table ──
