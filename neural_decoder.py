@@ -26,18 +26,42 @@ from torch.optim.lr_scheduler import StepLR
 
 from channel import (
     bpsk_modulate, noise_var_from_snr, amplitude_from_inr,
-    generate_interference, K_INFO,
+    generate_interference, awgn_channel, K_INFO,
 )
-from trellis import load_nasa_k7, Trellis
+from trellis import load_nasa_k7, Trellis, CONSTRAINT_LEN
 
 
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-N_CODED = 512
-N_STATES = 64
-RATE = 0.5
+_N_TAIL = CONSTRAINT_LEN - 1           # 6 tail bits
+_N_CODED_FIXED = 2 * (K_INFO + _N_TAIL)  # 524 coded bits
 RESULTS_DIR = Path(__file__).parent / "results" / "phase2a"
+
+
+# ─────────────────────────────────────────────
+# Fixed-tail encoder helper
+# ─────────────────────────────────────────────
+
+def _encode_fixed_tail(info_bits: np.ndarray, trellis: Trellis) -> np.ndarray:
+    """
+    Encode info_bits with exactly _N_TAIL = 6 zero-input tail steps.
+
+    Unlike trellis.encode(), which stops early when the state reaches 0,
+    this function always produces exactly 2*(K_INFO + 6) = 524 coded bits.
+
+    Returns:
+        coded_bits: (524,) int8
+    """
+    state = 0
+    coded: list[int] = []
+    for bit in info_bits:
+        coded.extend(trellis.output_bits[state, int(bit)])
+        state = trellis.next_state[state, int(bit)]
+    for _ in range(_N_TAIL):
+        coded.extend(trellis.output_bits[state, 0])
+        state = trellis.next_state[state, 0]
+    return np.array(coded, dtype=np.int8)
 
 
 # ─────────────────────────────────────────────
@@ -51,23 +75,21 @@ class TrainConfig:
     input_dim: int = 1
     cell_type: str = "GRU"
     bidirectional: bool = True
-    use_batchnorm: bool = False
 
-    # Training — lr=1e-3, constant (no decay: lr_step_factor=1.0)
+    # Training
     lr: float = 1e-3
     lr_step_epoch: int = 50
     lr_step_factor: float = 1.0
-    grad_clip: float = 1.0
     batch_size: int = 128
-    batches_per_epoch: int = 1000
-    n_epochs: int = 100
-    pool_size: int = 50000
+    batches_per_epoch: int = 200
+    n_epochs: int = 200
 
-    # Validation
-    val_blocks: int = 10000
+    # Validation — every val_every epochs; patience is in validation rounds
+    val_blocks: int = 1000
+    val_every: int = 5
     val_snr_db: float = 5.0
     val_inr_db: float = 5.0
-    patience: int = 20
+    patience: int = 20  # validation rounds without BLER improvement
 
     # Channel training ranges — CLAUDE.md
     snr_range: tuple[float, float] = (0.0, 10.0)
@@ -98,8 +120,7 @@ class BiRNNDecoder(nn.Module):
     Per CLAUDE.md:
       Input:  (batch, 524, 1) — each received BPSK symbol is one time step
       BiGRU:  h=32/dir -> concat -> (batch, 524, 64)
-      Output: Linear(64,1) at each position -> sigmoid -> 524 probabilities
-      Select: info bit positions 0,2,4,...,510 -> 256 info bit predictions
+      Output: Linear(64, K_INFO) on pooled final hidden states -> (batch, 256)
     """
 
     def __init__(
@@ -108,7 +129,6 @@ class BiRNNDecoder(nn.Module):
         input_dim: int = 1,
         cell_type: str = "GRU",
         bidirectional: bool = True,
-        use_batchnorm: bool = False,
         n_info: int = K_INFO,
     ) -> None:
         super().__init__()
@@ -116,13 +136,11 @@ class BiRNNDecoder(nn.Module):
         self.input_dim = input_dim
         self.cell_type = cell_type
         self.bidirectional = bidirectional
-        self.use_batchnorm = use_batchnorm
         self.n_info = n_info  # 256
 
         num_directions = 2 if bidirectional else 1
         self.rnn_out_dim = hidden_size * num_directions
 
-        # RNN layer
         rnn_cls = {"GRU": nn.GRU, "LSTM": nn.LSTM, "RNN": nn.RNN}[cell_type]
         self.rnn = rnn_cls(
             input_size=input_dim,
@@ -131,10 +149,6 @@ class BiRNNDecoder(nn.Module):
             bidirectional=bidirectional,
         )
 
-        # Optional BatchNorm1d between GRU and output layer
-        self.bn = nn.BatchNorm1d(self.rnn_out_dim) if use_batchnorm else None
-
-        # Linear maps pooled GRU output -> n_info logits directly
         self.output_linear = nn.Linear(self.rnn_out_dim, n_info)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -143,141 +157,63 @@ class BiRNNDecoder(nn.Module):
             x: (batch, N_sym, input_dim) — received signal
 
         Returns:
-            logits: (batch, K_INFO=256) — logits for all info bits
+            logits: (batch, K_INFO=256)
         """
-        rnn_out, h_n = self.rnn(x)        # h_n: (2, B, H) for bidirectional
-        # pooled = rnn_out.mean(dim=1)    # (batch, 2H) — mean pooling (disabled)
-        pooled = h_n.transpose(0, 1).reshape(x.size(0), -1)  # (B, 2H) — final hidden states
-        return self.output_linear(pooled) # (batch, K_INFO)
+        _, h_n = self.rnn(x)  # h_n: (2, B, H) for bidirectional
+        pooled = h_n.transpose(0, 1).reshape(x.size(0), -1)  # (B, 2H)
+        return self.output_linear(pooled)  # (batch, K_INFO)
 
 
 # ─────────────────────────────────────────────
-# Model: Attention-based BiGRU Decoder
-# ─────────────────────────────────────────────
-# class BiRNNDecoder(nn.Module):
-#     """
-#     Attention-based Bidirectional GRU decoder.
-
-#     Architecture:
-#       Input:        (B, 524, 1) — raw received signal
-#       BiGRU:        -> (B, 524, 64) all hidden states
-#       Attention:    learned scalar score per timestep -> softmax weights
-#       Context:      weighted sum -> (B, 64)
-#       Output:       Linear(64, 256) -> (B, 256) info bit logits
-
-#     The attention vector v scores each timestep independently, letting the
-#     model focus on the most informative received symbols.
-#     """
-
-#     def __init__(self, hidden_size: int = 32, n_info: int = K_INFO) -> None:
-#         super().__init__()
-#         rnn_dim = 2 * hidden_size                          # 64 for h=32
-#         self.rnn = nn.GRU(input_size=1, hidden_size=hidden_size,
-#                           batch_first=True, bidirectional=True)
-#         self.attn_vector = nn.Linear(rnn_dim, 1, bias=False)  # v: scores each timestep
-#         self.output_linear = nn.Linear(rnn_dim, n_info)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         """
-#         Args:
-#             x: (B, N_sym, 1) — received signal
-
-#         Returns:
-#             logits: (B, K_INFO=256)
-#         """
-#         rnn_out, _ = self.rnn(x)               # (B, 524, 64)
-#         e = self.attn_vector(rnn_out)           # (B, 524, 1) — attention scores
-#         a = torch.softmax(e, dim=1)             # (B, 524, 1) — normalised weights
-#         c = (a * rnn_out).sum(dim=1)            # (B, 64)     — weighted context
-#         return self.output_linear(c)            # (B, 256)
-
-
-# ─────────────────────────────────────────────
-# Pre-encoded codeword pool
-# ─────────────────────────────────────────────
-def _max_coded_len(trellis: Trellis) -> int:
-    """Max coded length: 2 * (K_INFO + K-1) = 2*(256+6) = 524 for K=7."""
-    constraint_len = int(np.log2(trellis.n_states)) + 1
-    return 2 * (K_INFO + constraint_len - 1)
-
-
-def build_codeword_pool(
-    trellis: Trellis,
-    pool_size: int,
-    seed: int = 0,
-) -> dict[str, np.ndarray]:
-    """
-    Pre-encode a pool of codewords. Pads shorter outputs to max length (524).
-
-    Returns:
-        dict with 'info_bits' (pool_size, K_INFO) and 'symbols' (pool_size, 524)
-    """
-    rng = np.random.default_rng(seed)
-    max_len = _max_coded_len(trellis)
-
-    info_arr = np.empty((pool_size, K_INFO), dtype=np.int8)
-    sym_arr = np.zeros((pool_size, max_len), dtype=np.float32)
-
-    for i in range(pool_size):
-        info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-        coded = trellis.encode(info_bits)
-        symbols = bpsk_modulate(coded)
-        info_arr[i] = info_bits
-        sym_arr[i, :len(symbols)] = symbols.astype(np.float32)
-
-        if (i + 1) % 10000 == 0:
-            print(f"  Pool encoding: {i + 1}/{pool_size}")
-
-    return {
-        'info_bits': info_arr,
-        'symbols': sym_arr,
-    }
-
-
-# ─────────────────────────────────────────────
-# Batch generation
+# Batch generation (on-the-fly)
 # ─────────────────────────────────────────────
 def generate_training_batch(
-    pool: dict[str, np.ndarray],
+    trellis: Trellis,
     batch_size: int,
-    snr_range: tuple[float, float],
-    inr_range: tuple[float, float],
+    snr_db: float,
+    inr_db: float,
     period_range: tuple[int, int],
     rng: np.random.Generator,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Generate a training batch from pre-encoded pool + fresh channel noise.
+    Generate a training batch on-the-fly.
+
+    SNR and INR are fixed for the whole batch; period and phase are drawn
+    independently per block to match the evaluation distribution.
 
     Returns:
         received: (batch_size, 524, 1) float32 tensor on device
         info_bits: (batch_size, K_INFO) float32 tensor on device
     """
-    pool_size = len(pool['info_bits'])
-    indices = rng.integers(0, pool_size, batch_size)
-    info_bits = pool['info_bits'][indices]    # (B, K_INFO)
-    symbols = pool['symbols'][indices]        # (B, 524)
-    n_sym = symbols.shape[1]
+    noise_var = noise_var_from_snr(snr_db)
+    amplitude = amplitude_from_inr(inr_db, noise_var)
 
-    snr_db = rng.uniform(snr_range[0], snr_range[1], batch_size)
-    inr_db = rng.uniform(inr_range[0], inr_range[1], batch_size)
-    periods = rng.integers(period_range[0], period_range[1] + 1, batch_size)
-    phases = rng.uniform(0, 2 * np.pi, batch_size)
+    received_list: list[np.ndarray] = []
+    info_bits_list: list[np.ndarray] = []
 
-    received = np.empty_like(symbols)
-    for i in range(batch_size):
-        nv = noise_var_from_snr(snr_db[i])
-        noise = rng.standard_normal(n_sym).astype(np.float32) * np.sqrt(nv)
-        amp = amplitude_from_inr(inr_db[i], nv)
-        interf = generate_interference(n_sym, amp, float(periods[i]), phases[i])
-        received[i] = symbols[i] + noise + interf.astype(np.float32)
+    for _ in range(batch_size):
+        period = float(rng.integers(period_range[0], period_range[1] + 1))
+        phase = float(rng.uniform(0.0, 2.0 * np.pi))
 
-    # (B, 524, 1) — each symbol is one time step, input_dim=1
-    received = received.reshape(batch_size, n_sym, 1)
+        info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
+        coded = _encode_fixed_tail(info_bits, trellis)  # always 524 bits
+        symbols = bpsk_modulate(coded)
+        N = len(symbols)
+
+        noise = rng.standard_normal(N).astype(np.float32) * np.sqrt(noise_var)
+        interf = generate_interference(N, amplitude, period, phase).astype(np.float32)
+        received = symbols + noise + interf
+
+        received_list.append(received)
+        info_bits_list.append(info_bits)
+
+    received_arr = np.stack(received_list).reshape(batch_size, _N_CODED_FIXED, 1)
+    info_arr = np.stack(info_bits_list).astype(np.float32)
 
     return (
-        torch.tensor(received, dtype=torch.float32, device=device),
-        torch.tensor(info_bits, dtype=torch.float32, device=device),
+        torch.tensor(received_arr, dtype=torch.float32, device=device),
+        torch.tensor(info_arr, dtype=torch.float32, device=device),
     )
 
 
@@ -288,61 +224,64 @@ def generate_training_batch(
 def validate_bler(
     model: BiRNNDecoder,
     trellis: Trellis,
-    pool: dict[str, np.ndarray],
     snr_db: float,
     inr_db: float,
     n_blocks: int,
     device: torch.device,
     seed: int = 99,
+    period_range: tuple[int, int] = (8, 32),
     batch_size: int = 256,
-) -> tuple[float, float]:
-    """Compute BLER and bit accuracy on a validation set at fixed SNR/INR.
+) -> float:
+    """
+    Compute BLER at fixed SNR/INR with random period/phase per block.
 
     Returns:
-        (bler, bit_acc) — block error rate and mean bit accuracy
+        bler — block error rate
     """
     model.eval()
     rng = np.random.default_rng(seed)
+    noise_var = noise_var_from_snr(snr_db)
+    amplitude = amplitude_from_inr(inr_db, noise_var)
+
     n_errors = 0
     n_done = 0
-    total_bit_acc = 0.0
 
     while n_done < n_blocks:
         bs = min(batch_size, n_blocks - n_done)
 
-        pool_size = len(pool['info_bits'])
-        indices = rng.integers(0, pool_size, bs)
-        info_bits = pool['info_bits'][indices]
-        symbols = pool['symbols'][indices]
-        n_sym = symbols.shape[1]
+        received_list: list[np.ndarray] = []
+        info_bits_list: list[np.ndarray] = []
 
-        received = np.empty_like(symbols)
-        for i in range(bs):
-            nv = noise_var_from_snr(snr_db)
-            noise = rng.standard_normal(n_sym).astype(np.float32) * np.sqrt(nv)
-            amp = amplitude_from_inr(inr_db, nv)
-            period = rng.integers(8, 33)
-            phase = rng.uniform(0, 2 * np.pi)
-            interf = generate_interference(n_sym, amp, float(period), phase)
-            received[i] = symbols[i] + noise + interf.astype(np.float32)
+        for _ in range(bs):
+            period = float(rng.integers(period_range[0], period_range[1] + 1))
+            phase = float(rng.uniform(0.0, 2.0 * np.pi))
 
-        rx_tensor = torch.tensor(
-            received.reshape(bs, n_sym, 1), dtype=torch.float32, device=device,
-        )
+            info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
+            coded = _encode_fixed_tail(info_bits, trellis)  # always 524 bits
+            symbols = bpsk_modulate(coded)
+            N = len(symbols)
+
+            noise = rng.standard_normal(N).astype(np.float32) * np.sqrt(noise_var)
+            interf = generate_interference(N, amplitude, period, phase).astype(np.float32)
+            received = symbols + noise + interf
+
+            received_list.append(received)
+            info_bits_list.append(info_bits)
+
+        received_arr = np.stack(received_list).reshape(bs, _N_CODED_FIXED, 1)
+        rx_tensor = torch.tensor(received_arr, dtype=torch.float32, device=device)
 
         logits = model(rx_tensor)
         preds = (torch.sigmoid(logits) > 0.5).cpu().numpy().astype(np.int8)
 
         for i in range(bs):
-            if not np.array_equal(preds[i], info_bits[i]):
+            if not np.array_equal(preds[i], info_bits_list[i]):
                 n_errors += 1
-            total_bit_acc += np.mean(preds[i] == info_bits[i])
 
         n_done += bs
 
-    bler = n_errors / n_blocks
-    bit_acc = total_bit_acc / n_blocks
-    return bler, bit_acc
+    model.train()
+    return n_errors / n_blocks
 
 
 # ─────────────────────────────────────────────
@@ -354,12 +293,12 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
 
     Args:
         config: training configuration
-        seed: random seed
-        model: optional pretrained model to continue training (for curriculum learning).
-               If None, a fresh model is created from config.
+        seed:   random seed
+        model:  optional pretrained model to continue training (curriculum learning).
+                If None, a fresh model is created from config.
 
     Returns:
-        trained model (loaded from best checkpoint)
+        trained model (loaded from best checkpoint by val BLER)
     """
     device = torch.device(config.device)
     if device.type == "cuda":
@@ -371,6 +310,9 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     if model is None:
         model = BiRNNDecoder(
             hidden_size=config.hidden_size,
+            input_dim=config.input_dim,
+            cell_type=config.cell_type,
+            bidirectional=config.bidirectional,
         ).to(device)
         print("  Initialized fresh model")
     else:
@@ -380,7 +322,6 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params:,}")
 
-    # Adam + StepLR: lr=1e-3 for first 50 epochs, then 1e-4
     optimizer = Adam(model.parameters(), lr=config.lr)
     scheduler = StepLR(
         optimizer,
@@ -389,14 +330,8 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     )
     criterion = nn.BCEWithLogitsLoss()
 
-    # Build codeword pool
     trellis = load_nasa_k7()
-    print("Building codeword pool...")
-    pool = build_codeword_pool(trellis, config.pool_size, seed=seed)
-    print(f"  Pool: {pool['info_bits'].shape[0]} codewords, "
-          f"symbol length = {pool['symbols'].shape[1]}")
 
-    # Directories
     ckpt_dir = Path(config.checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     log_dir = Path(config.log_dir)
@@ -407,28 +342,30 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
     log_path = log_dir / f"training_{config.cell_type.lower()}_h{config.hidden_size}.json"
 
     rng = np.random.default_rng(seed + 1)
-    best_val_bit_acc = 0.0
+    best_val_bler = float('inf')
     best_epoch = -1
     patience_counter = 0
     training_log = []
 
     print(f"Training for up to {config.n_epochs} epochs "
           f"({config.batches_per_epoch} batches/epoch, batch_size={config.batch_size})")
-    print(f"LR schedule: {config.lr} for epochs 0-{config.lr_step_epoch-1}, "
-          f"then {config.lr * config.lr_step_factor}")
+    print(f"Validation every {config.val_every} epochs, "
+          f"patience={config.patience} validation rounds")
     print("-" * 60)
 
     for epoch in range(config.n_epochs):
         model.train()
         epoch_loss = 0.0
-        epoch_bit_acc = 0.0
         t0 = time.time()
 
         for _ in range(config.batches_per_epoch):
+            # Draw SNR/INR once per batch; period/phase vary per block inside
+            snr_db = float(rng.uniform(config.snr_range[0], config.snr_range[1]))
+            inr_db = float(rng.uniform(config.inr_range[0], config.inr_range[1]))
+
             received, info_bits = generate_training_batch(
-                pool, config.batch_size,
-                config.snr_range, config.inr_range, config.period_range,
-                rng, device,
+                trellis, config.batch_size, snr_db, inr_db,
+                config.period_range, rng, device,
             )
 
             logits = model(received)
@@ -436,72 +373,69 @@ def train_model(config: TrainConfig, seed: int = 42, model: Optional[BiRNNDecode
 
             optimizer.zero_grad()
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
 
             epoch_loss += loss.item()
-            with torch.no_grad():
-                preds = (torch.sigmoid(logits) > 0.5).float()
-                epoch_bit_acc += (preds == info_bits).float().mean().item()
 
         avg_loss = epoch_loss / config.batches_per_epoch
-        avg_bit_acc = epoch_bit_acc / config.batches_per_epoch
         epoch_time = time.time() - t0
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
-        # Validation
-        val_bler, val_bit_acc = validate_bler(
-            model, trellis, pool,
-            config.val_snr_db, config.val_inr_db, config.val_blocks,
-            device, seed=99,
-        )
-
-        entry = {
+        entry: dict = {
             'epoch': epoch,
             'loss': avg_loss,
-            'val_bler': val_bler,
-            'val_bit_acc': val_bit_acc,
             'lr': current_lr,
             'time_s': epoch_time,
         }
+
+        # Validate every val_every epochs (and always on the final epoch)
+        if (epoch + 1) % config.val_every == 0 or epoch == config.n_epochs - 1:
+            val_bler = validate_bler(
+                model, trellis,
+                config.val_snr_db, config.val_inr_db, config.val_blocks,
+                device, seed=99, period_range=config.period_range,
+            )
+            entry['val_bler'] = val_bler
+
+            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | val_bler={val_bler:.4f} | "
+                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
+
+            if val_bler < best_val_bler:
+                best_val_bler = val_bler
+                best_epoch = epoch
+                patience_counter = 0
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'config': asdict(config),
+                    'epoch': int(epoch),
+                    'val_bler': float(val_bler),
+                    'loss': float(avg_loss),
+                }, ckpt_path)
+            else:
+                patience_counter += 1
+                if patience_counter >= config.patience:
+                    print(f"  Early stopping at epoch {epoch} "
+                          f"(patience={config.patience} rounds without improvement)")
+                    training_log.append(entry)
+                    break
+        elif epoch % 10 == 0:
+            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | "
+                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
+
         training_log.append(entry)
 
         with open(log_path, 'w') as f:
             json.dump(training_log, f, indent=2)
 
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | bit_acc={avg_bit_acc:.4f} | "
-                  f"val_bit_acc={val_bit_acc:.4f} | val_bler={val_bler:.4f} | "
-                  f"lr={current_lr:.1e} | time={epoch_time:.1f}s")
-
-        # Checkpoint — save when val bit accuracy improves
-        if val_bit_acc > best_val_bit_acc:
-            best_val_bit_acc = val_bit_acc
-            patience_counter = 0
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'config': asdict(config),
-                'epoch': int(epoch),
-                'val_bler': float(val_bler),
-                'val_bit_acc': float(val_bit_acc),
-                'loss': float(avg_loss),
-            }, ckpt_path)
-            best_epoch = epoch
-        else:
-            patience_counter += 1
-            if patience_counter >= config.patience:
-                print(f"  Early stopping at epoch {epoch} (patience={config.patience})")
-                break
-
     print("-" * 60)
-    print(f"Training complete. Best val bit_acc: {best_val_bit_acc:.4f} (epoch {best_epoch})")
+    print(f"Training complete. Best val BLER: {best_val_bler:.4f} (epoch {best_epoch})")
     print(f"Checkpoint: {ckpt_path}")
     print(f"Log: {log_path}")
 
-    # Load best model
-    best = torch.load(ckpt_path, map_location=device, weights_only=True)
-    model.load_state_dict(best['model_state_dict'])
+    if ckpt_path.exists():
+        best = torch.load(ckpt_path, map_location=device, weights_only=True)
+        model.load_state_dict(best['model_state_dict'])
     return model
 
 
@@ -528,14 +462,12 @@ def make_decoder_n1(
         snr_db: float,
         inr_db: float,
     ) -> np.ndarray:
-        max_len = 524  # 2 * (K_INFO + 6) for K=7
-        if len(received) < max_len:
-            padded = np.zeros(max_len, dtype=np.float32)
+        if len(received) < _N_CODED_FIXED:
+            padded = np.zeros(_N_CODED_FIXED, dtype=np.float32)
             padded[:len(received)] = received
             received = padded
 
-        # (1, 524, 1) — each symbol is one time step
-        x = received[:max_len].reshape(1, max_len, 1).astype(np.float32)
+        x = received[:_N_CODED_FIXED].reshape(1, _N_CODED_FIXED, 1).astype(np.float32)
         x_tensor = torch.tensor(x, dtype=torch.float32, device=dev)
 
         with torch.no_grad():
@@ -563,7 +495,6 @@ def load_model(
         input_dim=cfg['input_dim'],
         cell_type=cfg['cell_type'],
         bidirectional=cfg['bidirectional'],
-        use_batchnorm=cfg['use_batchnorm'],
     )
     model.load_state_dict(ckpt['model_state_dict'])
     model.to(device)
@@ -586,32 +517,32 @@ if __name__ == "__main__":
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  BiGRU h=32: {n_params:,} parameters")
 
-    x = torch.randn(4, 524, 1, device=device)
+    x = torch.randn(4, _N_CODED_FIXED, 1, device=device)
     logits = model(x)
     assert logits.shape == (4, K_INFO), f"Output shape wrong: {logits.shape}"
     print(f"  Forward pass: input {x.shape} -> output {logits.shape}")
 
     model.eval()
     decode_fn = make_decoder_n1(model, device)
-    rx = np.random.randn(524).astype(np.float32)
+    rx = np.random.randn(_N_CODED_FIXED).astype(np.float32)
     decoded = decode_fn(rx, 16.0, 0.0, 5.0, 5.0)
     assert decoded.shape == (K_INFO,), f"Decoded shape wrong: {decoded.shape}"
     assert decoded.dtype == np.int8
     print(f"  Decode wrapper: input ({rx.shape[0]},) -> output {decoded.shape}")
 
     trellis = load_nasa_k7()
-    pool = build_codeword_pool(trellis, 100, seed=0)
-    assert pool['info_bits'].shape == (100, K_INFO)
-    n_sym = pool['symbols'].shape[1]
-    print(f"  Pool: {pool['info_bits'].shape}, symbols length = {n_sym}")
-
     rng = np.random.default_rng(42)
+
+    info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
+    coded = _encode_fixed_tail(info_bits, trellis)
+    assert len(coded) == _N_CODED_FIXED, f"Coded length wrong: {len(coded)}"
+    print(f"  _encode_fixed_tail: {K_INFO} info bits -> {len(coded)} coded bits")
+
     rx_batch, bits_batch = generate_training_batch(
-        pool, batch_size=8,
-        snr_range=(0.0, 10.0), inr_range=(-5.0, 10.0),
+        trellis, batch_size=8, snr_db=5.0, inr_db=5.0,
         period_range=(8, 32), rng=rng, device=device,
     )
-    assert rx_batch.shape == (8, n_sym, 1), f"Batch shape wrong: {rx_batch.shape}"
+    assert rx_batch.shape == (8, _N_CODED_FIXED, 1), f"Batch shape wrong: {rx_batch.shape}"
     assert bits_batch.shape == (8, K_INFO)
     print(f"  Batch: received {rx_batch.shape}, info_bits {bits_batch.shape}")
 
@@ -623,5 +554,11 @@ if __name__ == "__main__":
     loss.backward()
     optimizer.step()
     print(f"  Training step: loss = {loss.item():.4f}")
+
+    val_bler = validate_bler(
+        model, trellis, snr_db=5.0, inr_db=5.0,
+        n_blocks=20, device=device, seed=0,
+    )
+    print(f"  Validation BLER (random model, 20 blocks): {val_bler:.4f}")
 
     print("PASS")
