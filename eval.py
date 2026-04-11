@@ -305,6 +305,146 @@ def _load_inr_sweep(npz_path: Path) -> list[dict]:
     ]
 
 
+def _extract_seed_tag(path: str | Path) -> str:
+    """Extract checkpoint seed suffix like '_seed32' from a filename."""
+    import re
+    match = re.search(r'seed(\d+)', Path(path).stem)
+    return f"_seed{match.group(1)}" if match else ""
+
+
+def _get_bler_at_snr(pts: list[dict], target_snr: float = 5.0) -> float:
+    """Return BLER at the requested SNR from a loaded sweep."""
+    for p in pts:
+        if abs(p['snr_db'] - target_snr) < 0.1:
+            return p['bler']
+    return float('nan')
+
+
+def _resolve_torch_device(device: str = "") -> str:
+    """Auto-detect torch device if none is requested explicitly."""
+    import torch
+
+    if device:
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def write_phase2b_compute_table(
+    checkpoint_path: Optional[str] = None,
+    inr_db: float = 5.0,
+    device: str = "",
+) -> Path:
+    """
+    Build and save the Phase 2b compute table from existing result files.
+
+    This does not rerun BLER sweeps. It loads saved sweep outputs from disk,
+    measures latency for the available decoders, and writes compute_table.md.
+    """
+    from neural_bm import (
+        load_model as load_n2_model, make_decoder_n2,
+        build_branch_output_index,
+    )
+    from compute_cost import count_flops_birnn_analytical
+
+    phase1_dir = RESULTS_DIR / "phase1"
+    phase2b_dir = RESULTS_DIR / "phase2b"
+    phase2b_dir.mkdir(parents=True, exist_ok=True)
+
+    n2_checkpoint_path = checkpoint_path or str(
+        phase2b_dir / "checkpoints" / "best_model_seed32.pt"
+    )
+    seed_tag = _extract_seed_tag(n2_checkpoint_path)
+    n2_snr_path = phase2b_dir / f"bler_N2_neural_bm_inr{inr_db:.0f}dB{seed_tag}.npz"
+
+    if not n2_snr_path.exists():
+        raise FileNotFoundError(
+            f"Missing Phase 2b SNR sweep results: {n2_snr_path}. "
+            "Run Phase 2 evaluation first or provide matching saved results."
+        )
+
+    device = _resolve_torch_device(device)
+    n2_model, _ = load_n2_model(n2_checkpoint_path)
+
+    trellis = load_nasa_k7()
+    encode_fn = make_encoder(trellis)
+    index_table = build_branch_output_index(trellis)
+    methods = {
+        'B1_mismatched_viterbi': (encode_fn, make_decoder_b1(trellis)),
+        'B2_oracle_viterbi':     (encode_fn, make_decoder_b2(trellis)),
+        'B5_interference_cancel':(encode_fn, make_decoder_b5(trellis)),
+        'N2_neural_bm':          (encode_fn, make_decoder_n2(n2_model, device, trellis, index_table)),
+    }
+
+    results = {
+        'B1_mismatched_viterbi': _load_snr_sweep(
+            phase1_dir / f"bler_B1_mismatched_viterbi_inr{inr_db:.0f}dB.npz"
+        ),
+        'B2_oracle_viterbi': _load_snr_sweep(
+            phase1_dir / f"bler_B2_oracle_viterbi_inr{inr_db:.0f}dB.npz"
+        ),
+        'B5_interference_cancel': _load_snr_sweep(
+            phase1_dir / f"bler_B5_interference_cancel_inr{inr_db:.0f}dB.npz"
+        ),
+        'N2_neural_bm': _load_snr_sweep(n2_snr_path),
+    }
+
+    viterbi_flops = count_flops_viterbi(N_STATES, N_CODED)
+    ic_viterbi_flops = count_flops_ic_viterbi(N_STATES, N_CODED)
+    n2_flops = count_flops_birnn_analytical(
+        hidden_size=16, input_dim=2, seq_len=262,
+        cell_type="GRU", bidirectional=True,
+    )
+
+    cost_methods = {
+        'B1_mismatched_viterbi': {
+            'flops': viterbi_flops, 'latency_ms': 0.0,
+            'bler_at_5db': _get_bler_at_snr(results['B1_mismatched_viterbi']),
+        },
+        'B2_oracle_viterbi': {
+            'flops': viterbi_flops, 'latency_ms': 0.0,
+            'bler_at_5db': _get_bler_at_snr(results['B2_oracle_viterbi']),
+        },
+        'B5_interference_cancel': {
+            'flops': ic_viterbi_flops, 'latency_ms': 0.0,
+            'bler_at_5db': _get_bler_at_snr(results['B5_interference_cancel']),
+        },
+        'N2_neural_bm': {
+            'flops': n2_flops, 'latency_ms': 0.0,
+            'bler_at_5db': _get_bler_at_snr(results['N2_neural_bm']),
+        },
+    }
+
+    rng = np.random.default_rng(0)
+    test_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
+    test_symbols = encode_fn(test_bits)
+    test_rx = awgn_channel(test_symbols, 5.0, inr_db, 16.0, 0.0, rng)
+
+    for name, (_, decode_fn) in methods.items():
+        lat = measure_latency_ms(
+            lambda rx: decode_fn(rx, 16.0, 0.0, 5.0, inr_db),
+            test_rx, n_warmup=5, n_runs=20,
+        )
+        cost_methods[name]['latency_ms'] = lat['mean_ms']
+
+    table = make_compute_table(cost_methods)
+    print(table)
+    print()
+    assert_within_budget("B1_mismatched_viterbi", viterbi_flops)
+    assert_within_budget("B2_oracle_viterbi", viterbi_flops)
+    assert_within_budget("B5_interference_cancel", ic_viterbi_flops)
+    assert_within_budget("N2_neural_bm", n2_flops)
+
+    out_path = phase2b_dir / "compute_table.md"
+    with open(out_path, 'w') as f:
+        f.write(table)
+    print(f"\nCompute table saved to: {out_path}")
+    return out_path
+
+
 # ─────────────────────────────────────────────
 # Phase 1 main evaluation
 # ─────────────────────────────────────────────
@@ -496,10 +636,7 @@ def run_phase2a(
         Path(__file__).parent / "results" / "phase2b" / "checkpoints" / "best_model_seed32.pt"
     )
 
-    # Extract seed tag from checkpoint filename (e.g. "best_model_seed32.pt" -> "_seed32")
-    import re
-    _seed_match = re.search(r'seed(\d+)', Path(n2_checkpoint_path).stem)
-    _seed_tag = f"_seed{_seed_match.group(1)}" if _seed_match else ""
+    _seed_tag = _extract_seed_tag(n2_checkpoint_path)
 
     print("=" * 60)
     print("Phase 2a/2b: Neural Decoder Evaluation")
@@ -583,73 +720,11 @@ def run_phase2a(
 
     # ── Compute cost table ──
     print("\nCompute Cost Table:")
-    viterbi_flops = count_flops_viterbi(N_STATES, N_CODED)
-    ic_viterbi_flops = count_flops_ic_viterbi(N_STATES, N_CODED)
-    n2_flops = count_flops_birnn_analytical(
-        hidden_size=16, input_dim=2, seq_len=262,
-        cell_type="GRU", bidirectional=True,
+    write_phase2b_compute_table(
+        checkpoint_path=n2_checkpoint_path,
+        inr_db=inr_db,
+        device=device,
     )
-    # gru_flops = count_flops_birnn_analytical(  # N1 — not used yet
-    #     hidden_size=24, input_dim=2, seq_len=262,
-    #     cell_type="GRU", bidirectional=True,
-    # )
-
-    def get_bler_at_snr(pts, target_snr=5.0):
-        for p in pts:
-            if abs(p['snr_db'] - target_snr) < 0.1:
-                return p['bler']
-        return float('nan')
-
-    cost_methods = {
-        'B1_mismatched_viterbi': {
-            'flops': viterbi_flops, 'latency_ms': 0.0,
-            'bler_at_5db': get_bler_at_snr(results['B1_mismatched_viterbi']),
-        },
-        'B2_oracle_viterbi': {
-            'flops': viterbi_flops, 'latency_ms': 0.0,
-            'bler_at_5db': get_bler_at_snr(results['B2_oracle_viterbi']),
-        },
-        'B5_interference_cancel': {
-            'flops': ic_viterbi_flops, 'latency_ms': 0.0,
-            'bler_at_5db': get_bler_at_snr(results['B5_interference_cancel']),
-        },
-        'N2_neural_bm': {
-            'flops': n2_flops, 'latency_ms': 0.0,
-            'bler_at_5db': get_bler_at_snr(results['N2_neural_bm']),
-        },
-        # 'N1_gru_e2e': {  # not trained yet
-        #     'flops': gru_flops, 'latency_ms': 0.0,
-        #     'bler_at_5db': get_bler_at_snr(results['N1_gru_e2e']),
-        # },
-    }
-
-    # Measure latency
-    rng = np.random.default_rng(0)
-    test_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-    test_symbols = encode_fn(test_bits)
-    test_rx = awgn_channel(test_symbols, 5.0, inr_db, 16.0, 0.0, rng)
-
-    for name, (_, decode_fn) in methods.items():
-        lat = measure_latency_ms(
-            lambda rx: decode_fn(rx, 16.0, 0.0, 5.0, inr_db),
-            test_rx, n_warmup=5, n_runs=20,
-        )
-        cost_methods[name]['latency_ms'] = lat['mean_ms']
-
-    table = make_compute_table(cost_methods)
-    print(table)
-
-    # Budget checks
-    print()
-    assert_within_budget("B1_mismatched_viterbi", viterbi_flops)
-    assert_within_budget("B2_oracle_viterbi", viterbi_flops)
-    assert_within_budget("B5_interference_cancel", ic_viterbi_flops)
-    assert_within_budget("N2_neural_bm", n2_flops)
-    # assert_within_budget("N1_gru_e2e", gru_flops)  # not trained yet
-
-    # Save compute table
-    with open(phase2a_dir / "compute_table_phase2a.md", 'w') as f:
-        f.write(table)
 
     # dB gain
     from plot_utils import db_gain
@@ -695,6 +770,11 @@ if __name__ == "__main__":
                         help='Path to trained neural decoder checkpoint')
     parser.add_argument('--device', type=str, default='',
                         help='torch device (auto-detect if empty)')
+    parser.add_argument(
+        '--compute-only',
+        action='store_true',
+        help='for phase 2, generate compute_table.md from existing results without rerunning sweeps',
+    )
     args = parser.parse_args()
 
     snr_range = np.arange(args.snr_min, args.snr_max + 0.01, args.snr_step)
@@ -707,11 +787,18 @@ if __name__ == "__main__":
             seed=args.seed,
         )
     elif args.phase == 2:
-        run_phase2a(
-            checkpoint_path=args.checkpoint,
-            n_trials=args.n_trials,
-            snr_range=snr_range,
-            inr_db=args.inr_db,
-            seed=args.seed,
-            device=args.device,
-        )
+        if args.compute_only:
+            write_phase2b_compute_table(
+                checkpoint_path=args.checkpoint,
+                inr_db=args.inr_db,
+                device=args.device,
+            )
+        else:
+            run_phase2a(
+                checkpoint_path=args.checkpoint,
+                n_trials=args.n_trials,
+                snr_range=snr_range,
+                inr_db=args.inr_db,
+                seed=args.seed,
+                device=args.device,
+            )

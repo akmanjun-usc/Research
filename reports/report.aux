@@ -1,0 +1,117 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{viterbi1967}
+\citation{proakis2008}
+\providecommand \oddpage@label [2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {II}System Model}{1}{section.2}\protected@file@percent }
+\citation{nasastandard}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A}Channel}{2}{subsection.2.1}\protected@file@percent }
+\newlabel{eq:channel}{{1}{2}{Channel}{equation.1}{}}
+\newlabel{eq:interference}{{2}{2}{Channel}{equation.2}{}}
+\newlabel{eq:amplitude}{{3}{2}{Channel}{equation.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B}Trellis Code}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {C}System Parameters}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Fixed system parameters}}{2}{table.caption.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:params}{{I}{2}{Fixed system parameters}{table.caption.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {D}Compute Budget}{2}{subsection.2.4}\protected@file@percent }
+\newlabel{sec:budget}{{D}{2}{Compute Budget}{subsection.2.4}{}}
+\newlabel{eq:viterbi_cost}{{4}{3}{Compute Budget}{equation.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {III}Phase 1: Classical Baselines}{3}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A}Mismatched Viterbi (B1)}{3}{subsection.3.1}\protected@file@percent }
+\newlabel{eq:b1metric}{{5}{3}{Mismatched Viterbi (B1)}{equation.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B}Oracle Viterbi (B2)}{3}{subsection.3.2}\protected@file@percent }
+\newlabel{eq:b2metric}{{6}{3}{Oracle Viterbi (B2)}{equation.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {C}Interference Cancellation + Viterbi (B5)}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D}Compute Cost}{3}{subsection.3.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Phase~1 compute cost (per block, 10{,}000-trial latency median)}}{4}{table.caption.2}\protected@file@percent }
+\newlabel{tab:phase1compute}{{II}{4}{Phase~1 compute cost (per block, 10{,}000-trial latency median)}{table.caption.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {E}Results}{4}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {E1}BLER vs.\ SNR (INR = 5~dB)}{4}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces BLER vs.\ SNR at INR~$=5$~dB (10{,}000 trials per point)}}{4}{table.caption.3}\protected@file@percent }
+\newlabel{tab:phase1snr}{{III}{4}{BLER vs.\ SNR at INR~$=5$~dB (10{,}000 trials per point)}{table.caption.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces BLER vs.\ SNR at INR~$=5$~dB for B1, B2, and B5. See Table~\ref {tab:phase1snr} for numerical values.}}{4}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:phase1snr}{{1}{4}{BLER vs.\ SNR at INR~$=5$~dB for B1, B2, and B5. See Table~\ref {tab:phase1snr} for numerical values}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {E2}BLER vs.\ INR (SNR = 5~dB)}{4}{subsubsection.3.5.2}\protected@file@percent }
+\citation{gruber2017}
+\citation{kim2018}
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces BLER vs.\ INR at SNR~$=5$~dB (10{,}000 trials per point)}}{5}{table.caption.5}\protected@file@percent }
+\newlabel{tab:phase1inr}{{IV}{5}{BLER vs.\ INR at SNR~$=5$~dB (10{,}000 trials per point)}{table.caption.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces BLER vs.\ INR at SNR~$=5$~dB for B1, B2, and B5. B2 is invariant to INR; B1 and B5 degrade with increasing interference. See Table~\ref {tab:phase1inr} for numerical values.}}{5}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:phase1inr}{{2}{5}{BLER vs.\ INR at SNR~$=5$~dB for B1, B2, and B5. B2 is invariant to INR; B1 and B5 degrade with increasing interference. See Table~\ref {tab:phase1inr} for numerical values}{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {IV}Phase 2a: End-to-End Neural Decoder}{5}{section.4}\protected@file@percent }
+\newlabel{sec:phase2a}{{IV}{5}{Phase 2a: End-to-End Neural Decoder}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A}Architecture}{5}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {B}Training Configuration}{5}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {C}Analytical Compute Budget}{6}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:n1flops}{{C}{6}{Analytical Compute Budget}{subsection.4.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {D}Experimental Results}{6}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {E}Failure Analysis}{6}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {E0a}Information bottleneck.}{6}{paragraph.4.5.0.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {E0b}Implicit trellis search.}{6}{paragraph.4.5.0.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {E0c}Design lesson.}{6}{paragraph.4.5.0.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {V}Phase 2b: Neural Branch Metric Estimator}{6}{section.5}\protected@file@percent }
+\newlabel{sec:phase2b}{{V}{6}{Phase 2b: Neural Branch Metric Estimator}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A}Motivation}{6}{subsection.5.1}\protected@file@percent }
+\citation{shlezinger2020}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B}Architecture}{7}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {C}Oracle Training Targets and Loss Function}{7}{subsection.5.3}\protected@file@percent }
+\newlabel{eq:oracle_metric}{{10}{7}{Oracle Training Targets and Loss Function}{equation.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {D}Training Configuration}{7}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {E}Viterbi Integration}{7}{subsection.5.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {V}{\ignorespaces N2 training hyperparameters}}{8}{table.caption.7}\protected@file@percent }
+\newlabel{tab:n2train}{{V}{8}{N2 training hyperparameters}{table.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {F}Compute Cost}{8}{subsection.5.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {VI}{\ignorespaces Phase~2b compute cost (per block); B1/B2/B5 repeated for comparison}}{8}{table.caption.8}\protected@file@percent }
+\newlabel{tab:phase2bcompute}{{VI}{8}{Phase~2b compute cost (per block); B1/B2/B5 repeated for comparison}{table.caption.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {G}Results: BLER vs.\ SNR}{8}{subsection.5.7}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {VII}{\ignorespaces BLER vs.\ SNR at INR~$=5$~dB, both N2 seeds (10{,}000 trials)}}{9}{table.caption.9}\protected@file@percent }
+\newlabel{tab:phase2bsnr}{{VII}{9}{BLER vs.\ SNR at INR~$=5$~dB, both N2 seeds (10{,}000 trials)}{table.caption.9}{}}
+\newlabel{fig:snr_seed32}{{3a}{9}{Seed~32 (external $\sigma ^2$ normalization)}{figure.caption.10}{}}
+\newlabel{sub@fig:snr_seed32}{{a}{9}{Seed~32 (external $\sigma ^2$ normalization)}{figure.caption.10}{}}
+\newlabel{fig:snr_seed42}{{3b}{9}{Seed~42 (normalized training targets)}{figure.caption.10}{}}
+\newlabel{sub@fig:snr_seed42}{{b}{9}{Seed~42 (normalized training targets)}{figure.caption.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces BLER vs.\ SNR at INR~$=5$~dB for N2 (both seeds) and baselines. Numerical values in Table~\ref {tab:phase2bsnr}.}}{9}{figure.caption.10}\protected@file@percent }
+\newlabel{fig:phase2bsnr}{{3}{9}{BLER vs.\ SNR at INR~$=5$~dB for N2 (both seeds) and baselines. Numerical values in Table~\ref {tab:phase2bsnr}}{figure.caption.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {H}Results: BLER vs.\ INR}{9}{subsection.5.8}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {VIII}{\ignorespaces BLER vs.\ INR at SNR~$=5$~dB, both N2 seeds (10{,}000 trials)}}{9}{table.caption.11}\protected@file@percent }
+\newlabel{tab:phase2binr}{{VIII}{9}{BLER vs.\ INR at SNR~$=5$~dB, both N2 seeds (10{,}000 trials)}{table.caption.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {I}Training Convergence}{9}{subsection.5.9}\protected@file@percent }
+\newlabel{fig:inr_seed32}{{4a}{10}{Seed~32}{figure.caption.12}{}}
+\newlabel{sub@fig:inr_seed32}{{a}{10}{Seed~32}{figure.caption.12}{}}
+\newlabel{fig:inr_seed42}{{4b}{10}{Seed~42}{figure.caption.12}{}}
+\newlabel{sub@fig:inr_seed42}{{b}{10}{Seed~42}{figure.caption.12}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces BLER vs.\ INR at SNR~$=5$~dB for N2 (both seeds) and baselines. Seed~32 degrades gracefully; B1 saturates above INR~$\approx 5$~dB. Numerical values in Table~\ref {tab:phase2binr}.}}{10}{figure.caption.12}\protected@file@percent }
+\newlabel{fig:phase2binr}{{4}{10}{BLER vs.\ INR at SNR~$=5$~dB for N2 (both seeds) and baselines. Seed~32 degrades gracefully; B1 saturates above INR~$\approx 5$~dB. Numerical values in Table~\ref {tab:phase2binr}}{figure.caption.12}{}}
+\newlabel{fig:hist_seed32}{{5a}{10}{Seed~32: MSE and validation BLER}{figure.caption.13}{}}
+\newlabel{sub@fig:hist_seed32}{{a}{10}{Seed~32: MSE and validation BLER}{figure.caption.13}{}}
+\newlabel{fig:hist_seed42}{{5b}{10}{Seed~42: MSE and validation BLER}{figure.caption.13}{}}
+\newlabel{sub@fig:hist_seed42}{{b}{10}{Seed~42: MSE and validation BLER}{figure.caption.13}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Per-epoch training MSE and validation BLER for both N2 seeds. Seed~32 converges substantially faster; see Table~\ref {tab:trainsummary} for summary statistics.}}{10}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:trainhist}{{5}{10}{Per-epoch training MSE and validation BLER for both N2 seeds. Seed~32 converges substantially faster; see Table~\ref {tab:trainsummary} for summary statistics}{figure.caption.13}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {IX}{\ignorespaces Training convergence summary}}{11}{table.caption.14}\protected@file@percent }
+\newlabel{tab:trainsummary}{{IX}{11}{Training convergence summary}{table.caption.14}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Comparative Analysis}{12}{section.6}\protected@file@percent }
+\newlabel{sec:comparison}{{VI}{12}{Comparative Analysis}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A}Performance at the Operating Point (SNR~$=5$~dB, INR~$=5$~dB)}{12}{subsection.6.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {X}{\ignorespaces Summary comparison at SNR~$=5$~dB, INR~$=5$~dB}}{12}{table.caption.15}\protected@file@percent }
+\newlabel{tab:summary}{{X}{12}{Summary comparison at SNR~$=5$~dB, INR~$=5$~dB}{table.caption.15}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B}Seed~32 vs.\ Seed~42}{12}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {C}Limitations of the Current Approach}{12}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Conclusion and Future Work}{12}{section.7}\protected@file@percent }
+\newlabel{sec:conclusion}{{VII}{12}{Conclusion and Future Work}{section.7}{}}
+\bibstyle{IEEEtran}
+\bibcite{viterbi1967}{1}
+\bibcite{proakis2008}{2}
+\bibcite{nasastandard}{3}
+\bibcite{shlezinger2020}{4}
+\bibcite{gruber2017}{5}
+\bibcite{kim2018}{6}
+\bibcite{kargi2024}{7}
+\bibcite{yang2022}{8}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {0a}Future work (Phase~3).}{13}{paragraph.7.0.0.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{References}{13}{paragraph.7.0.0.1}\protected@file@percent }
+\gdef \@abspage@last{13}
