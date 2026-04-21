@@ -215,6 +215,8 @@ Interpretation: output[b, t, j] = learned branch metric for branch output j at t
 
 So `num_branch_outputs = 4`.
 
+**IMPORTANT for Phase 3b:** The NN output is a function of *received signal only*, producing 4 scores per time step for the 4 possible BPSK output pairs. The trellis structure enters *only* through the output-pair-index table used during Viterbi ACS. This is what makes the same frozen N2 network pluggable into different trellises during the Phase 3b search — provided the generalization sanity check passes.
+
 ### Hidden Size Selection and Compute Budget
 
 The NN must estimate A·sin(2πt/P + φ) — a sinusoid with 3 continuous parameters (A, P, φ) that vary per block. The BiGRU hidden state needs enough capacity to infer these from noisy observations. Start with h=16 per direction:
@@ -484,26 +486,128 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 ### Phase 3 — Trellis Search with Decoder-in-the-Loop (Target: ~4–8 weeks)
 **Goal:** Discover a 64-state trellis better suited to sinusoidal interference + neural decoding than the classical K=7 code.
 
-**Decomposition:** Phase 3 is split into 3a (oracle fitness) and 3b (N2 fitness) to isolate two risks: (1) is the EA machinery correct, and (2) does frozen N2 generalize across arbitrary valid trellises? Running 3a first with oracle fitness (which trivially handles any trellis) cleanly validates the EA before layering in the NN.
+**Decomposition rationale.** Phase 3 is split into **3a** (oracle fitness) and **3b** (N2 fitness) to isolate two orthogonal sources of risk:
+
+1. **Is the EA machinery correct?** — genome representation, constraint checks (non-catastrophic, connectivity, d_free), mutation/crossover operators, selection pressure, seed reproducibility.
+2. **Does a frozen N2 usefully decode arbitrary valid trellises?** — an unproven assumption; if N2's branch-metric head doesn't generalize across transition tables, Tier 1 fitness collapses.
+
+Running N2-in-the-loop EA directly conflates both risks: a flat fitness curve could come from either. Running 3a first with an oracle fitness (which trivially handles any valid trellis) cleanly isolates risk #1. Once 3a converges, 3b layers on exactly one new variable: the decoder.
+
+**Caveat for 3a's scientific scope.** Under oracle decoding, interference is perfectly subtracted, so the effective channel is AWGN. Phase 3a therefore reduces to *"find the best 64-state rate-1/2 code for AWGN under ML decoding"* — a classically studied problem where NASA K=7 (Odenwalder) is already near-optimal. Do not expect 3a to produce a novel code. Its value is **(i) validating the EA converges, and (ii) establishing the oracle-decoding ceiling against which 3b's co-designed trellis is measured.** If 3b's best trellis ≠ 3a's best trellis, *that* is the evidence for co-design mattering.
+
+**Simulated annealing is deferred.** SA is a fallback for when the EA plateaus at a clearly-suboptimal fitness. Not implemented in 3a or 3b. Will be added later (~2 days of work) only if EA diagnostics indicate deception or local-optima trapping.
+
+---
 
 #### Shared Foundation (build before 3a, reuse in 3b) — not yet started
-- [ ] `trellis_genome.py`: genome representation (`next_state: (64,2)`, `output_pair: (64,2)`), serialize/deserialize, `genome_hash`, `perturb`, `random_valid_trellis`, `nasa_k7_trellis`
-- [ ] `constraints.py`: `is_non_catastrophic`, `is_fully_connected`, `compute_dfree` — **must pass `compute_dfree(nasa_k7) == 10` before EA runs**
-- [ ] `search.py`: pop=50, elite=2, tournament selection (size 3), mutation (1–3 edges, reject-if-invalid), state-wise crossover, elitism + plateau termination (50 gen), deterministic genome-hash logging
-- [ ] Tests: `test_constraints.py`, `test_genome.py`, `test_search_convergence.py`
 
-#### Phase 3a — EA with Oracle Fitness — not yet started
-- [ ] `fitness.py :: fitness_oracle(trellis, seed)`: 1,000 MC blocks, B2 oracle decoder parameterized on candidate trellis, returns BLER
-- [ ] Run 5 seeds × 200 generations; artifacts in `results/phase3a/`
-- [ ] Exit criteria: monotone-non-increasing fitness curve; best trellis d_free ≥ 8; BLER within ~0.2 dB of NASA K=7
+**These modules must exist, be unit-tested, and be frozen before either 3a or 3b runs.**
 
-#### Phase 3b — EA with N2 Fitness — not yet started
-- [ ] Prerequisite: `test_n2_generalization.py` — frozen seed32 N2 on 10 random valid trellises; median BLER < 0.5 required to proceed
-- [ ] `fitness.py :: fitness_n2(trellis, seed)`: 1,000 MC blocks, frozen seed32 N2 + `viterbi_neural_bm` with candidate's output-pair-index table
-- [ ] Run 5 seeds × 200 generations; artifacts in `results/phase3b/`
-- [ ] Tier 2: top-5 candidates × 10,000 MC trials across full SNR/INR grid → `results/phase3b/tier2_sweep.npz`
+- [ ] `trellis_genome.py`:
+  - [ ] Candidate representation: `next_state: (64, 2) int`, `output_pair: (64, 2) int ∈ {0,1,2,3}` where 0=(−1,−1), 1=(−1,+1), 2=(+1,−1), 3=(+1,+1)
+  - [ ] `serialize(trellis) -> bytes` / `deserialize(b) -> trellis` for reproducible hashing
+  - [ ] `genome_hash(trellis) -> str` — SHA-256 of serialized bytes, used as the logging key
+  - [ ] `perturb(trellis, n_edges, rng) -> trellis` — single-edge rewirings and output-pair flips
+  - [ ] `random_valid_trellis(rng, max_tries) -> trellis` — seed uniformly over validity-filtered space
+  - [ ] `nasa_k7_trellis() -> trellis` — reference (133,171)₈
+- [ ] `constraints.py`:
+  - [ ] `is_non_catastrophic(trellis) -> bool` — state-pair difference-graph test (Lin & Costello Ch. 11)
+  - [ ] `is_fully_connected(trellis) -> bool` — BFS from state 0 reaches all 64 states AND from every state, state 0 is reachable (required for termination)
+  - [ ] `compute_dfree(trellis) -> int` — modified state diagram / Dijkstra on error trellis
+  - [ ] **Required unit test:** `compute_dfree(nasa_k7_trellis())` must return exactly 10. Do not proceed to the EA loop until this passes.
+- [ ] `search.py`:
+  - [ ] Population management (pop=50, elite=2)
+  - [ ] Tournament selection (size 3)
+  - [ ] Mutation (1–3 edges per genome, reject-and-retry if constraint-violating)
+  - [ ] State-wise crossover with repair step (swap all outgoing edges from a random subset of states)
+  - [ ] Accepts `fitness_fn: Callable[[Trellis, int], float]` — 3a and 3b plug in different fitness functions
+  - [ ] Elitism-based termination: plateau detection (no best-fitness improvement in 50 generations) OR fixed gen budget (200)
+  - [ ] **Deterministic logging:** every evaluated candidate's genome hash, fitness, generation, and RNG seed saved to `.npz`
 
-**Primary success bar:** at BLER=10⁻³, `3b_best + N2` beats B3 (random trellis + N2) by ≥ 1 dB. **Co-design evidence:** `3b_best + N2` ≥ `3a_best + N2` by ≥ 0.5 dB.
+**Tests for the shared foundation (must all pass before Phase 3a runs):**
+- [ ] `test_constraints.py`:
+  - [ ] `compute_dfree(NASA_K7) == 10`
+  - [ ] `is_non_catastrophic(NASA_K7) == True`
+  - [ ] `is_fully_connected(NASA_K7) == True`
+  - [ ] `compute_dfree` of a known catastrophic code returns `inf` or raises
+- [ ] `test_genome.py`:
+  - [ ] `deserialize(serialize(T)) == T` for random valid T
+  - [ ] `perturb(T, n_edges=1)` produces a valid candidate ≥ 50% of the time (if not, perturbation is too aggressive)
+  - [ ] `genome_hash` is stable across runs
+- [ ] `test_search_convergence.py`:
+  - [ ] With a trivial synthetic fitness (e.g., Hamming distance of the genome to NASA K=7), EA converges in ≤ 50 generations. Tests elitism, selection, and mutation mechanics before any expensive fitness is plugged in.
+
+---
+
+#### Phase 3a — EA Search with Oracle Fitness (Target: 2–3 weeks) — not yet started
+
+**Purpose:**
+1. Validate the EA machinery end-to-end under a fast, deterministic fitness signal.
+2. Establish the *oracle-decoding ceiling* — the best trellis a search can find when the decoder has perfect interference knowledge. This is the reference point for 3b.
+
+**Tasks:**
+- [ ] `fitness.py :: fitness_oracle(trellis, seed) -> float`:
+  - 1,000 MC blocks with per-block randomized channel params (SNR, INR, P, φ) drawn from the training distribution
+  - Decoder: reuse `branch_metric_oracle` from `decoders.py` (B2), parameterized on the candidate trellis
+  - Return: BLER (lower is better)
+  - Expected wall-clock: ~1 s per candidate on CPU
+- [ ] Initialization: perturb NASA K=7 until the population of 50 all pass constraint checks
+- [ ] Run 5 independent RNG seeds, 200 generations each
+- [ ] Per-seed artifacts: `results/phase3a/best_trellis_seed{0..4}.npz`, `fitness_curves_seed{0..4}.npz`
+- [ ] Aggregate figure: fitness-improvement curves (best-of-generation, mean ± std across seeds)
+
+**Exit criteria for Phase 3a:**
+1. Fitness curve (best-of-generation, mean across 5 seeds) is monotonically non-increasing (elitism guarantees this) AND drops *meaningfully* from gen 0 to gen 200. A flat curve means the EA is broken or the neighborhood around K=7 is already saturated — diagnose before proceeding.
+2. Best trellis from each seed satisfies non-catastrophic + connected + d_free ≥ 8.
+3. Best trellis achieves BLER *within ~0.2 dB of NASA K=7* under oracle decoding. A much larger gain is a **red flag** — either a measurement bug or a genuinely novel finding that must be verified before being trusted.
+4. Seed-to-seed variance tight: coefficient of variation < 10% on final fitness.
+
+**Deliverable:** Fitness improvement curves across seeds; best trellis(es) from 3a; written confirmation that EA machinery works. This is the green light to start 3b.
+
+---
+
+#### Phase 3b — EA Search with N2 Fitness (Target: 1–2 weeks + optional retraining) — not yet started
+
+**Purpose:** Discover trellises co-designed with N2. This is the core research contribution (the S1 system).
+
+**Prerequisite sanity check (DO BEFORE writing `fitness_n2`):**
+
+- [ ] `test_n2_generalization.py`:
+  - Load `results/phase2b/checkpoints/best_model_seed32.pt`
+  - Generate 10 random valid 64-state rate-1/2 trellises
+  - For each, run 1,000 MC blocks at SNR=5 dB, INR=5 dB using `viterbi_neural_bm` with the candidate's output-pair-index table
+  - Record the BLER distribution
+
+**Decision tree based on median BLER:**
+- **Median BLER < 0.5** → N2 generalizes across trellises. Proceed with frozen N2 as 3b fitness decoder.
+- **Median BLER ∈ [0.5, 0.9]** → N2 partially generalizes. Two options: (a) meta-train a new N2 on a *distribution* of random valid trellises (~1 week extra work) to improve generalization, or (b) accept a noisier fitness signal and run EA with larger populations.
+- **Median BLER > 0.9** → N2 does not generalize. 3b as designed is not viable; revisit plan before writing `search.py` changes.
+
+Do not skip this. Without it, a flat 3b fitness curve is indistinguishable from a bug.
+
+**Tasks:**
+- [ ] `fitness.py :: fitness_n2(trellis, seed) -> float`:
+  - 1,000 MC blocks, same channel distribution as 3a
+  - Decoder: frozen seed-32 N2 + `viterbi_neural_bm`, with candidate trellis's output-pair-index table swapped in
+  - Return: BLER
+  - Expected wall-clock: ~1–2 s per candidate (one NN forward pass + Viterbi ACS per block, batched)
+- [ ] Run 5 independent RNG seeds, 200 generations each, reusing `search.py` from the shared foundation
+- [ ] Per-seed artifacts: `results/phase3b/best_trellis_seed{0..4}.npz`, `fitness_curves_seed{0..4}.npz`
+- [ ] **Tier 2 (final only, not during search):** For the top 5 candidates from the final generation (aggregated across seeds), run 10,000 MC trials across SNR ∈ {0,2,4,6,8,10} dB × INR ∈ {-5,0,5,10} dB. Optional: short N2 fine-tune per candidate (~100 epochs on that trellis specifically) to see how much additional gain retraining adds.
+- [ ] Save Tier 2 output to `results/phase3b/tier2_sweep.npz`
+
+**Exit criteria for Phase 3b:**
+1. Search converges (same monotone-non-increasing curve shape as 3a).
+2. **Primary success bar:** at BLER=10⁻³, `3b_best + N2` beats `random_trellis + N2` (B3) by **≥ 1 dB**.
+3. **Co-design evidence:** at BLER=10⁻³, `3b_best + N2` ≥ `3a_best + N2` by ≥ 0.5 dB. If not, N2 adds no co-design gain beyond "pick a good classical code" — still a publishable negative result but shifts the narrative.
+4. **Headline figure for the paper:** BLER vs SNR at INR=5 dB, four curves —
+   - (i) K=7 + B1 (mismatched Viterbi)
+   - (ii) K=7 + N2 (Phase 2b result)
+   - (iii) random trellis + N2 (B3)
+   - (iv) 3b-best + N2 (S1)
+   Story: (i)→(ii) is the Phase 2b decoder-side gain; (ii)→(iv) is the Phase 3 code-side gain; (iii) << (iv) proves the search is non-trivial.
+
+**Deliverable:** Candidate trellis(es); 4-curve headline figure; comparison of 3a-best vs 3b-best to demonstrate co-design effect.
 
 ---
 
@@ -532,6 +636,7 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 - [ ] Which error events dominate? Analyze error patterns
 - [ ] Does searched trellis show implicit interleaving structure?
 - [ ] Does neural decoder exploit periodicity of interference?
+- [ ] Compare state-transition matrices: 3a-best vs 3b-best vs NASA K=7. Is there structural divergence between 3a and 3b, or do they find the same code?
 
 **Paper writeup checklist:**
 - [ ] System model section (channel, trellis, decoder)
