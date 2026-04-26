@@ -47,8 +47,9 @@ project/
 ├── channel.py          # AWGN + sinusoidal interference simulator
 ├── trellis.py          # Trellis FSM: encode, validate, load standard codes
 ├── decoders.py         # Viterbi (mismatched + oracle), optional C speedup
-├── viterbi_core.c      # C extension for Viterbi inner loop
+├── viterbi_core.c      # C extension for Viterbi inner loop (B1/B2)
 ├── viterbi_core.so     # Compiled C extension
+├── build_viterbi.sh    # Build script for viterbi_core.so
 ├── interference_est.py # FFT-based interference estimation + cancellation
 ├── baselines.py        # B1, B2, B3, B5 baseline wrappers
 ├── eval.py             # Monte Carlo BLER, SNR/INR sweeps, Phase 1 runner
@@ -58,9 +59,13 @@ project/
 ├── neural_decoder.py   # [Phase 2a] BiRNNDecoder (BiGRU, final-hidden-state pooling), training loop, decode fn
 ├── neural_bm.py        # [Phase 2b] Neural branch metric estimator + Viterbi integration
 ├── trellis_genome.py   # [Phase 3] Candidate representation + perturbation operator — not yet created
-├── constraints.py      # [Phase 3] Non-catastrophic, connectivity, d_free — not yet created
+├── constraints.py      # [Phase 3] Non-catastrophic, connectivity, d_free (Python reference impls) — not yet created
 ├── search.py           # [Phase 3] Evolutionary trellis search (fitness-callback driven) — not yet created
 ├── fitness.py          # [Phase 3] fitness_oracle (3a) + fitness_n2 (3b) — not yet created
+├── phase3_core.c       # [Phase 3] C extension: encode, viterbi_neural_bm, constraint checks, mutate+validate — not yet created
+├── phase3_core.so      # [Phase 3] Compiled C extension — not yet built
+├── phase3_native.py    # [Phase 3] ctypes bindings + Python fallbacks for phase3_core.so — not yet created
+├── build_phase3_core.sh # [Phase 3] Build script for phase3_core.so — not yet created
 ├── tests/
 │   ├── conftest.py             # Pytest configuration
 │   ├── test_encode_decode.py   # Noiseless encode→decode round-trip
@@ -78,7 +83,8 @@ project/
 │   ├── test_constraints.py     # [Phase 3] d_free(NASA K=7)=10; non-catastrophic + connectivity — not yet created
 │   ├── test_genome.py          # [Phase 3] Round-trip serialize/deserialize; perturbation validity rate — not yet created
 │   ├── test_n2_generalization.py  # [Phase 3b prerequisite] Frozen N2 on 10 random valid trellises — not yet created
-│   └── test_search_convergence.py # [Phase 3] EA fitness curve monotone non-increasing — not yet created
+│   ├── test_search_convergence.py # [Phase 3] EA fitness curve monotone non-increasing — not yet created
+│   └── test_c_python_parity.py    # [Phase 3] C functions agree bit-for-bit with Python references — not yet created
 └── results/
     ├── phase1/         # Phase 1 eval: .npz data, compute_table.md
     │   └── figures/    # phase1_bler_vs_snr.pdf, phase1_bler_vs_inr.pdf
@@ -125,6 +131,7 @@ The seed32 variant significantly outperforms seed42. It is the current default i
 
 **Important repo-level status notes:**
 - `trellis_genome.py`, `constraints.py`, `search.py`, and `fitness.py` are still not present; trellis search has not started. Phase 3 is scoped and planned (see `Phase_3` doc) but no code has been written.
+- `phase3_core.c`, `phase3_core.so`, `phase3_native.py`, and `build_phase3_core.sh` are also not yet present. These are the C-acceleration layer for Phase 3 (see "C Extensions for Phase 3" section below); pure-Python implementations in `trellis.py`, `constraints.py`, and `neural_bm.py` come first and serve as the correctness oracle.
 
 ---
 
@@ -483,6 +490,65 @@ All variants: BLER = 1.0 (no block ever decoded correctly).
 
 ---
 
+## C Extensions for Phase 3
+
+The EA inner loop is `generations × population × 1,000 MC trials` deep. Three Phase 3 hot-path operations get C implementations to keep Tier 1 fitness in the ~1–2 s/candidate range that makes 5-seed × 200-generation runs tractable. All C functions live in a single shared library (`phase3_core.so`) loaded via ctypes, mirroring the existing `viterbi_core.c` / `decoders.py::_load_c_lib` pattern.
+
+### What lives in C
+
+| C function | Replaces (Python reference) | Called per |
+|------------|-----------------------------|------------|
+| `encode_c` | `trellis.Trellis.encode()` | MC trial |
+| `viterbi_neural_bm_c` | `neural_bm.viterbi_neural_bm()` | MC trial (Tier 1 fitness inner loop) |
+| `check_connectivity_c` | `constraints.is_fully_connected()` | every mutation attempt |
+| `check_termination_c` | `constraints.is_terminating()` | every mutation attempt |
+| `check_noncatastrophic_c` | `constraints.is_non_catastrophic()` | every mutation attempt |
+| `compute_dfree_c` | `constraints.compute_dfree()` | every mutation attempt |
+| `mutate_and_validate_c` | `trellis_genome.mutate_and_validate()` | every accepted offspring (composes the four constraint checks above + reject-and-retry loop) |
+
+The bundled `mutate_and_validate_c` is the architecturally important one: rejection rates can be 50–80% (Phase_3 doc §4), and bundling mutation + cheap-check + medium-check + expensive-check + retry into one C call avoids paying Python↔C boundary cost on every rejected candidate. Cheap checks (connectivity, termination) run before non-catastrophic, which runs before d_free — most rejections never reach the d_free Dijkstra.
+
+### What stays in Python / PyTorch
+
+- **The N2 NN forward pass** (`NeuralBranchMetric` in `neural_bm.py`). Already on GPU.
+- **`compute_oracle_metrics`**, channel simulation, EA control flow (selection, elitism, logging), Tier 2 retraining.
+- **`_build_reverse_trellis`** — runs once per candidate, fiddly Python lists; not worth porting.
+- **`build_branch_output_index`** — runs once per trellis; same reasoning.
+
+### Mandatory Python references (write FIRST, used as correctness oracle)
+
+For every C function above, the corresponding Python implementation in `trellis.py` / `constraints.py` / `neural_bm.py` is written and unit-tested **before** the C version. The Python version is the oracle — if the C function disagrees with it, the C function is wrong. This is non-negotiable per Phase_3 doc §9 ("Phase 3 has a much higher chance of silently producing wrong results than anything you've done so far, because there's no oracle to check against").
+
+The pattern from `decoders.py` is the template:
+- `phase3_native.py` exposes one wrapper per C function.
+- Each wrapper tries `_load_c_lib()`; on failure, falls back to the Python reference and emits a one-shot warning.
+- A CI test (`test_c_python_parity.py`) runs both implementations on the same fixed-seed inputs and asserts identical outputs (bit-exact for integer outputs; bit-exact decoded sequences from `viterbi_neural_bm`).
+
+### Required correctness anchors (before EA can run)
+
+- `compute_dfree(NASA K=7) == 10` — both Python and C.
+- `is_non_catastrophic(NASA K=7) == True` — both Python and C; plus a hand-built catastrophic 4-state code returning `False`.
+- `encode(NASA K=7, info_bits)` — both Python and C produce identical 524-bit codewords for 100 random info-bit blocks.
+- `viterbi_neural_bm(K=7, fixed branch_metrics)` — both produce identical decoded bits for 100 fixed-seed inputs.
+
+If any of these fail, the EA does not run.
+
+### Build
+
+`build_phase3_core.sh` mirrors the existing `build_viterbi.sh`:
+
+```bash
+cc -O3 -shared -fPIC -o phase3_core.so phase3_core.c    # macOS / Linux
+```
+
+The .so file is gitignored; the .c source is committed.
+
+### Performance expectations
+
+Per Phase_3 doc §8, a Tier 1 fitness eval is ~10 s/candidate in pure Python. Target after C extension: **1–2 s/candidate**, making 5-seed × 200-generation × 50-population runs feasible in 3–6 GPU-hours rather than ~28. If the speedup is much smaller, profile before adding more C — likely culprits are NumPy↔C boundary cost or unnecessary array reallocation in the wrappers.
+
+---
+
 ### Phase 3 — Trellis Search with Decoder-in-the-Loop (Target: ~4–8 weeks)
 **Goal:** Discover a 64-state trellis better suited to sinusoidal interference + neural decoding than the classical K=7 code.
 
@@ -503,22 +569,34 @@ Running N2-in-the-loop EA directly conflates both risks: a flat fitness curve co
 
 **These modules must exist, be unit-tested, and be frozen before either 3a or 3b runs.**
 
+**C-acceleration policy:** Each Python function marked with **[C-accel]** below has a corresponding C implementation in `phase3_core.c` and is invoked via `phase3_native.py`. The Python version is written and unit-tested first; the C version is added second; both are kept in the codebase and parity-tested. See "C Extensions for Phase 3" section above.
+
 - [ ] `trellis_genome.py`:
   - [ ] Candidate representation: `next_state: (64, 2) int`, `output_pair: (64, 2) int ∈ {0,1,2,3}` where 0=(−1,−1), 1=(−1,+1), 2=(+1,−1), 3=(+1,+1)
   - [ ] `serialize(trellis) -> bytes` / `deserialize(b) -> trellis` for reproducible hashing
   - [ ] `genome_hash(trellis) -> str` — SHA-256 of serialized bytes, used as the logging key
-  - [ ] `perturb(trellis, n_edges, rng) -> trellis` — single-edge rewirings and output-pair flips
+  - [ ] `perturb(trellis, n_edges, rng) -> trellis` — single-edge rewirings and output-pair flips (Python; the C-side equivalent is fused into `mutate_and_validate_c`)
   - [ ] `random_valid_trellis(rng, max_tries) -> trellis` — seed uniformly over validity-filtered space
   - [ ] `nasa_k7_trellis() -> trellis` — reference (133,171)₈
+  - [ ] `mutate_and_validate(parent, n_edges, op_mask, max_attempts, dfree_target, seed) -> (child, dfree, attempts) | None` — **[C-accel via `mutate_and_validate_c`]** mutation + all four constraint checks + reject-and-retry loop, fused into one C call to avoid boundary crossings on rejection
+- [ ] `trellis.py` updates:
+  - [ ] `Trellis.encode()` — **[C-accel via `encode_c`]** existing Python implementation kept as fallback
+- [ ] `neural_bm.py` updates:
+  - [ ] `viterbi_neural_bm()` — **[C-accel via `viterbi_neural_bm_c`]** existing Python implementation kept as fallback; this is the Tier 1 fitness inner loop and the highest-value C conversion
 - [ ] `constraints.py`:
-  - [ ] `is_non_catastrophic(trellis) -> bool` — state-pair difference-graph test (Lin & Costello Ch. 11)
-  - [ ] `is_fully_connected(trellis) -> bool` — BFS from state 0 reaches all 64 states AND from every state, state 0 is reachable (required for termination)
-  - [ ] `compute_dfree(trellis) -> int` — modified state diagram / Dijkstra on error trellis
-  - [ ] **Required unit test:** `compute_dfree(nasa_k7_trellis())` must return exactly 10. Do not proceed to the EA loop until this passes.
+  - [ ] `is_non_catastrophic(trellis) -> bool` — state-pair difference-graph test (Lin & Costello Ch. 11). **[C-accel via `check_noncatastrophic_c`]**
+  - [ ] `is_fully_connected(trellis) -> bool` — BFS from state 0 reaches all 64 states AND from every state, state 0 is reachable (required for termination). **[C-accel via `check_connectivity_c`]**
+  - [ ] `is_terminating(trellis, max_tail=6) -> bool` — every state reaches state 0 within `max_tail` input-0 steps. **[C-accel via `check_termination_c`]**
+  - [ ] `compute_dfree(trellis) -> int` — modified state diagram / Dijkstra on error trellis. **[C-accel via `compute_dfree_c`]**
+  - [ ] **Required unit test:** `compute_dfree(nasa_k7_trellis())` must return exactly 10, in BOTH Python and C implementations. Do not proceed to the EA loop until this passes.
+- [ ] `phase3_core.c` + `phase3_native.py` + `build_phase3_core.sh`:
+  - [ ] C source file containing all seven functions listed in "C Extensions for Phase 3"
+  - [ ] ctypes bindings module with one Python wrapper per C function, each falling back to the corresponding Python reference if `phase3_core.so` is missing
+  - [ ] Build script following the `build_viterbi.sh` template
 - [ ] `search.py`:
   - [ ] Population management (pop=50, elite=2)
   - [ ] Tournament selection (size 3)
-  - [ ] Mutation (1–3 edges per genome, reject-and-retry if constraint-violating)
+  - [ ] Mutation (1–3 edges per genome) — calls `trellis_genome.mutate_and_validate(...)` which routes through the C fast path
   - [ ] State-wise crossover with repair step (swap all outgoing edges from a random subset of states)
   - [ ] Accepts `fitness_fn: Callable[[Trellis, int], float]` — 3a and 3b plug in different fitness functions
   - [ ] Elitism-based termination: plateau detection (no best-fitness improvement in 50 generations) OR fixed gen budget (200)
@@ -536,6 +614,11 @@ Running N2-in-the-loop EA directly conflates both risks: a flat fitness curve co
   - [ ] `genome_hash` is stable across runs
 - [ ] `test_search_convergence.py`:
   - [ ] With a trivial synthetic fitness (e.g., Hamming distance of the genome to NASA K=7), EA converges in ≤ 50 generations. Tests elitism, selection, and mutation mechanics before any expensive fitness is plugged in.
+- [ ] `test_c_python_parity.py` — **NEW for Phase 3 C extensions:**
+  - [ ] `encode_c` vs `Trellis.encode()` on 100 random info-bit blocks — bit-exact
+  - [ ] `viterbi_neural_bm_c` vs `viterbi_neural_bm()` on 100 fixed-seed branch-metric inputs — bit-exact decoded outputs
+  - [ ] `check_connectivity_c`, `check_termination_c`, `check_noncatastrophic_c`, `compute_dfree_c` vs Python references on 50 random valid trellises plus NASA K=7 — identical outputs
+  - [ ] `mutate_and_validate_c` with a fixed seed produces a child that, when re-checked, passes all four standalone constraint checks and has the reported d_free
 
 ---
 
@@ -667,6 +750,7 @@ Do not skip this. Without it, a flat 3b fitness curve is indistinguishable from 
 - System only works at one SNR/INR point → overfitting
 - Any comparison made without matching compute budget → unfair, rejected by reviewers
 - **Phase 3 specific:** d_free implementation buggy → EA explores invalid subspace silently; always unit-test `d_free(NASA K=7) == 10` before running any search
+- **Phase 3 C-extension specific:** C and Python implementations disagree → silent EA bug, indistinguishable from a real result. `test_c_python_parity.py` must pass before any EA run. If parity fails, the C extension is disabled (`phase3_native.is_available()` returns False) and the Python fallback runs — slower but correct.
 - **Phase 3b specific:** skipping N2-generalization prerequisite → flat fitness curve is indistinguishable from EA bug
 - **Phase 3a/3b comparison:** B3 (random trellis) and S1 (searched) must use the **same decoder (N2)** — a mismatch makes the ≥1 dB gap meaningless
 
