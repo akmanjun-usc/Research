@@ -69,7 +69,7 @@ def main() -> None:
             print(_gen_line(snap), flush=True)
             if snap.get("is_complete"):
                 print(_GEN_SEP, flush=True)
-                print(f"  stopped: plateau={snap['plateau']} >= {50}", flush=True)
+                print(f"  stopped: plateau={snap['plateau']} >= 10", flush=True)
 
         result = run_ea(
             fitness_fn=fitness_fn,
@@ -78,6 +78,7 @@ def main() -> None:
             pop_size=POP_SIZE,
             elite_size=2,
             dfree_target=DFREE_TARGET,
+            plateau_patience=10,
             rng_seed=rng_seed,
             log_path=RESULTS_DIR / f"log_seed{rng_seed}.npz",
             generation_callback=generation_callback,
