@@ -53,6 +53,7 @@ def estimate_bler(
     n_trials: int,
     seed: int = 0,
     period_range: tuple[int, int] = (8, 32),
+    early_stop_errors: int = 100,
 ) -> dict:
     """
     Monte Carlo BLER estimation.
@@ -66,14 +67,17 @@ def estimate_bler(
         n_trials: number of Monte Carlo trials
         seed: random seed
         period_range: range of interference periods
+        early_stop_errors: stop early once this many block errors are seen (0 = disabled)
 
     Returns:
-        dict with bler, n_errors, n_trials, ci_95, snr_db, inr_db
+        dict with bler, n_errors, n_trials (actual trials run), ci_95, snr_db, inr_db
     """
     rng = np.random.default_rng(seed)
     n_errors = 0
+    n_trials_run = 0
 
     for _ in range(n_trials):
+        n_trials_run += 1
         info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
 
         # Random interference parameters
@@ -91,12 +95,14 @@ def estimate_bler(
 
         if not np.array_equal(info_bits, decoded):
             n_errors += 1
+            if early_stop_errors > 0 and n_errors >= early_stop_errors:
+                break
 
-    bler = n_errors / n_trials
-    ci = 1.96 * np.sqrt(bler * (1 - bler) / n_trials) if n_trials > 0 else 0.0
+    bler = n_errors / n_trials_run
+    ci = 1.96 * np.sqrt(bler * (1 - bler) / n_trials_run) if n_trials_run > 0 else 0.0
 
     return dict(
-        bler=bler, n_errors=n_errors, n_trials=n_trials,
+        bler=bler, n_errors=n_errors, n_trials=n_trials_run,
         ci_95=ci, snr_db=snr_db, inr_db=inr_db,
     )
 

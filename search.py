@@ -108,6 +108,7 @@ def run_ea(
     log_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[dict], None]] = None,
     generation_callback: Optional[Callable[[dict], None]] = None,
+    use_crn: bool = True,
 ) -> dict:
     if len(init_population) != pop_size:
         raise ValueError(f"expected init_population of size {pop_size}, got {len(init_population)}")
@@ -132,10 +133,12 @@ def run_ea(
 
         eval_start = perf_counter()
         n_evaluated = 0
+        # CRN: one seed per generation so all candidates see the same channel realizations
+        gen_eval_seed = int(rng.integers(0, 2**31 - 1))
         for idx, genome in enumerate(population):
             if gen > 0 and elite_mask[idx] and np.isfinite(fitnesses[idx]):
                 continue
-            eval_seed = int(rng.integers(0, 2**31 - 1))
+            eval_seed = gen_eval_seed if use_crn else int(rng.integers(0, 2**31 - 1))
             fitness = float(fitness_fn(genome, eval_seed))
             fitnesses[idx] = fitness
             n_evaluated += 1

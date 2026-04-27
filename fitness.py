@@ -4,7 +4,7 @@ fitness.py — Phase 3 fitness functions
 
 from __future__ import annotations
 
-from channel import amplitude_from_inr, awgn_channel, generate_interference, noise_var_from_snr
+from channel import amplitude_from_inr, awgn_channel, bpsk_modulate, generate_interference, noise_var_from_snr
 from decoders import branch_metric_oracle, viterbi_decode
 from eval import estimate_bler
 from neural_bm import _encode_fixed_tail
@@ -17,11 +17,12 @@ def fitness_oracle(
     n_trials: int = 1000,
     snr_db: float = 5.0,
     inr_db: float = 5.0,
+    early_stop_errors: int = 100,
 ) -> float:
     trellis = genome_to_trellis(genome)
 
     def encode_fn(info_bits):
-        return _encode_fixed_tail(info_bits, trellis)
+        return bpsk_modulate(_encode_fixed_tail(info_bits, trellis))
 
     def decode_fn(received, period, phase, snr_db, inr_db):
         nv = noise_var_from_snr(snr_db)
@@ -43,6 +44,7 @@ def fitness_oracle(
         inr_db=inr_db,
         n_trials=n_trials,
         seed=seed,
+        early_stop_errors=early_stop_errors,
     )
     return float(result["bler"])
 
