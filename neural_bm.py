@@ -60,15 +60,16 @@ def _encode_fixed_tail(info_bits: np.ndarray, trellis: Trellis) -> np.ndarray:
     Returns:
         coded_bits: (524,) int8
     """
-    state = 0
-    coded: list[int] = []
-    for bit in info_bits:
-        coded.extend(trellis.output_bits[state, int(bit)])
-        state = trellis.next_state[state, int(bit)]
-    for _ in range(_N_TAIL):
-        coded.extend(trellis.output_bits[state, 0])
-        state = trellis.next_state[state, 0]
-    return np.array(coded, dtype=np.int8)
+    from phase3_native import encode_native
+
+    return encode_native(
+        trellis.next_state,
+        trellis.output_bits,
+        np.asarray(info_bits, dtype=np.int8),
+        trellis.n_states,
+        K_INFO,
+        _N_TAIL,
+    )
 
 
 # ─────────────────────────────────────────────

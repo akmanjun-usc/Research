@@ -105,6 +105,7 @@ def _format_seed_table(seed_rows: list[dict]) -> str:
 def _serialize_profile_results(results: dict) -> dict[str, np.ndarray]:
     seed_rows = results["e2e"]["seed_rows"]
     generation_rows = results["e2e"]["generation_rows"]
+    eval_component_rows = results["e2e"]["evaluation_component_rows"]
     component_rows = results["components"]["rows"]
     config = results["config"]
     return {
@@ -126,6 +127,11 @@ def _serialize_profile_results(results: dict) -> dict[str, np.ndarray]:
         "gen_best_fitness": np.array([row["best_fitness"] for row in generation_rows], dtype=np.float64),
         "gen_mean_fitness": np.array([row["mean_fitness"] for row in generation_rows], dtype=np.float64),
         "gen_plateau": np.array([row["plateau"] for row in generation_rows], dtype=np.int32),
+        "eval_component_name": np.array([row["name"] for row in eval_component_rows], dtype=object),
+        "eval_component_calls": np.array([row["calls"] for row in eval_component_rows], dtype=np.int32),
+        "eval_component_total_s": np.array([row["total_s"] for row in eval_component_rows], dtype=np.float64),
+        "eval_component_mean_ms": np.array([row["mean_ms"] for row in eval_component_rows], dtype=np.float64),
+        "eval_component_share": np.array([row["share"] for row in eval_component_rows], dtype=np.float64),
         "component_name": np.array([row["name"] for row in component_rows], dtype=object),
         "component_calls": np.array([row["calls"] for row in component_rows], dtype=np.int32),
         "component_total_s": np.array([row["total_s"] for row in component_rows], dtype=np.float64),
@@ -237,6 +243,8 @@ def _run_component_profile(args) -> dict:
 def _run_e2e_profile(args) -> dict:
     seed_rows: list[dict] = []
     generation_rows: list[dict] = []
+    evaluation_component_totals: dict[str, float] = defaultdict(float)
+    evaluation_component_counts: dict[str, int] = defaultdict(int)
     run_start = perf_counter()
 
     for rng_seed in range(args.n_seeds):
@@ -257,8 +265,8 @@ def _run_e2e_profile(args) -> dict:
             n_trials=args.n_trials,
             snr_db=args.snr_db,
             inr_db=args.inr_db,
-            component_totals=defaultdict(float),
-            component_counts=defaultdict(int),
+            component_totals=evaluation_component_totals,
+            component_counts=evaluation_component_counts,
         )
 
         seed_generation_rows: list[dict] = []
@@ -295,6 +303,10 @@ def _run_e2e_profile(args) -> dict:
     return {
         "seed_rows": seed_rows,
         "generation_rows": generation_rows,
+        "evaluation_component_rows": _component_rows(
+            evaluation_component_totals,
+            evaluation_component_counts,
+        ),
         "run_time_s": float(perf_counter() - run_start),
     }
 
@@ -320,7 +332,12 @@ def run_profile(args) -> dict:
             "inr_db": args.inr_db,
         },
         "native": _native_status(),
-        "e2e": {"seed_rows": [], "generation_rows": [], "run_time_s": 0.0},
+        "e2e": {
+            "seed_rows": [],
+            "generation_rows": [],
+            "evaluation_component_rows": [],
+            "run_time_s": 0.0,
+        },
         "components": {"rows": []},
     }
 
@@ -347,8 +364,13 @@ def _print_summary(results: dict) -> None:
         print()
         print(_format_seed_table(results["e2e"]["seed_rows"]))
         print(f"total_run_s: {results['e2e']['run_time_s']:.4f}")
+    if results["e2e"]["evaluation_component_rows"]:
+        print()
+        print("EA evaluation breakdown:")
+        print(_format_component_table(results["e2e"]["evaluation_component_rows"]))
     if results["components"]["rows"]:
         print()
+        print("Component microbenchmarks:")
         print(_format_component_table(results["components"]["rows"]))
 
 

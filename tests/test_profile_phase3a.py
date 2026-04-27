@@ -57,6 +57,15 @@ def test_profile_result_serialization_and_seed_table():
                     "plateau": 0,
                 }
             ],
+            "evaluation_component_rows": [
+                {
+                    "name": "fitness_oracle_total",
+                    "calls": 5,
+                    "total_s": 2.0,
+                    "mean_ms": 400.0,
+                    "share": 1.0,
+                }
+            ],
             "run_time_s": 0.4,
         },
         "components": {
@@ -74,8 +83,10 @@ def test_profile_result_serialization_and_seed_table():
 
     payload = _serialize_profile_results(results)
     assert "component_name" in payload
+    assert "eval_component_name" in payload
     assert payload["e2e_seed"].shape == (1,)
     assert payload["gen_generation"].shape == (1,)
+    assert payload["eval_component_name"].shape == (1,)
 
     table = _format_seed_table(results["e2e"]["seed_rows"])
     assert "seed | init_s" in table
@@ -102,4 +113,5 @@ def test_run_profile_smoke(tmp_path):
 
     assert args.output.exists()
     assert results["e2e"]["seed_rows"]
+    assert results["e2e"]["evaluation_component_rows"]
     assert results["components"]["rows"]
