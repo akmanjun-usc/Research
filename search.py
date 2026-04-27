@@ -105,6 +105,7 @@ def run_ea(
     plateau_patience: int = 50,
     rng_seed: int = 0,
     log_path: Optional[Path] = None,
+    progress_callback: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     if len(init_population) != pop_size:
         raise ValueError(f"expected init_population of size {pop_size}, got {len(init_population)}")
@@ -160,6 +161,23 @@ def run_ea(
         if log_path is not None and (gen + 1) % 10 == 0:
             _save_log(log_entries, Path(log_path))
 
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "seed": int(rng_seed),
+                    "generation": int(gen),
+                    "best_fitness": best_so_far,
+                    "mean_fitness": gen_mean,
+                    "plateau": int(plateau),
+                    "is_complete": False,
+                    "convergence_generation": (
+                        int(convergence_generation)
+                        if convergence_generation is not None
+                        else None
+                    ),
+                }
+            )
+
         if best_so_far <= 0.0:
             break
 
@@ -198,6 +216,23 @@ def run_ea(
 
     if log_path is not None:
         _save_log(log_entries, Path(log_path))
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "seed": int(rng_seed),
+                "generation": int(len(best_curve) - 1),
+                "best_fitness": best_so_far,
+                "mean_fitness": (mean_curve[-1] if mean_curve else float("inf")),
+                "plateau": int(plateau),
+                "is_complete": True,
+                "convergence_generation": (
+                    int(convergence_generation)
+                    if convergence_generation is not None
+                    else None
+                ),
+            }
+        )
 
     return {
         "best_genome": best_genome,
