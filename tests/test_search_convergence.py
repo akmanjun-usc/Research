@@ -1,7 +1,32 @@
 import numpy as np
 
 from search import build_initial_population, run_ea
-from trellis_genome import nasa_k7_genome
+from trellis_genome import genome_hash, is_valid_genome, nasa_k7_genome
+
+
+def test_build_initial_population_deterministic_and_valid():
+    target = nasa_k7_genome()
+
+    rng_a = np.random.default_rng(123)
+    rng_b = np.random.default_rng(123)
+    pop_a = build_initial_population(
+        pop_size=10,
+        base_genome=target,
+        dfree_target=8,
+        rng=rng_a,
+    )
+    pop_b = build_initial_population(
+        pop_size=10,
+        base_genome=target,
+        dfree_target=8,
+        rng=rng_b,
+    )
+
+    assert len(pop_a) == 10
+    assert len(pop_b) == 10
+    assert [genome_hash(genome) for genome in pop_a] == [genome_hash(genome) for genome in pop_b]
+    assert all(is_valid_genome(genome) for genome in pop_a)
+    assert all(is_valid_genome(genome) for genome in pop_b)
 
 
 def test_run_ea_progress_callback_reports_monotone_best():

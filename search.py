@@ -17,7 +17,6 @@ from trellis_genome import (
     genome_hash,
     genome_to_trellis,
     is_valid_genome,
-    mutate_and_validate,
 )
 
 
@@ -45,12 +44,13 @@ def build_initial_population(
             n_edges = 2
         else:
             n_edges = 3
-        result = mutate_and_validate(
+        seed = int(rng.integers(0, 2**63 - 1))
+        result = mutate_and_validate_native(
             base_genome,
             n_edges=n_edges,
             max_attempts=10_000,
             dfree_target=dfree_target,
-            rng=rng,
+            seed=seed,
         )
         if result is None:
             raise RuntimeError(f"failed to build initial population member {idx}")
