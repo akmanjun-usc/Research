@@ -5,6 +5,7 @@ search.py — Evolutionary search engine for trellis genomes
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Callable, Optional
 
 import numpy as np
@@ -106,6 +107,7 @@ def run_ea(
     rng_seed: int = 0,
     log_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[dict], None]] = None,
+    generation_callback: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     if len(init_population) != pop_size:
         raise ValueError(f"expected init_population of size {pop_size}, got {len(init_population)}")
@@ -123,16 +125,20 @@ def run_ea(
     plateau = 0
 
     for gen in range(n_generations):
+        gen_start = perf_counter()
         elite_idx = np.argsort(fitnesses)[:elite_size] if gen > 0 else np.arange(elite_size)
         elite_mask = np.zeros(pop_size, dtype=bool)
         elite_mask[np.asarray(elite_idx, dtype=np.int32)] = True
 
+        eval_start = perf_counter()
+        n_evaluated = 0
         for idx, genome in enumerate(population):
             if gen > 0 and elite_mask[idx] and np.isfinite(fitnesses[idx]):
                 continue
             eval_seed = int(rng.integers(0, 2**31 - 1))
             fitness = float(fitness_fn(genome, eval_seed))
             fitnesses[idx] = fitness
+            n_evaluated += 1
             log_entries.append(
                 {
                     "genome_hash": genome_hash(genome),
@@ -141,6 +147,7 @@ def run_ea(
                     "eval_seed": eval_seed,
                 }
             )
+        eval_time_s = perf_counter() - eval_start
 
         gen_best_idx = int(np.argmin(fitnesses))
         gen_best = float(fitnesses[gen_best_idx])
@@ -178,41 +185,66 @@ def run_ea(
                 }
             )
 
-        if best_so_far <= 0.0:
-            break
+        should_stop = best_so_far <= 0.0 or plateau >= plateau_patience
+        offspring_time_s = 0.0
 
-        if plateau >= plateau_patience:
-            break
+        if not should_stop:
+            offspring_start = perf_counter()
+            ranked = np.argsort(fitnesses)
+            next_population = [_clone_genome(population[int(i)]) for i in ranked[:elite_size]]
+            next_fitnesses = np.array([fitnesses[int(i)] for i in ranked[:elite_size]], dtype=np.float64)
 
-        ranked = np.argsort(fitnesses)
-        next_population = [_clone_genome(population[int(i)]) for i in ranked[:elite_size]]
-        next_fitnesses = np.array([fitnesses[int(i)] for i in ranked[:elite_size]], dtype=np.float64)
+            while len(next_population) < pop_size:
+                parent_a = _tournament(population, fitnesses, tournament_size, rng)
+                parent_b = _tournament(population, fitnesses, tournament_size, rng)
+                if rng.random() < 0.3:
+                    child_seed = parent_a if rng.random() < 0.5 else parent_b
+                    child = _clone_genome(child_seed)
+                else:
+                    child = _statewise_crossover(parent_a, parent_b, rng)
 
-        while len(next_population) < pop_size:
-            parent_a = _tournament(population, fitnesses, tournament_size, rng)
-            parent_b = _tournament(population, fitnesses, tournament_size, rng)
-            if rng.random() < 0.3:
-                child_seed = parent_a if rng.random() < 0.5 else parent_b
-                child = _clone_genome(child_seed)
-            else:
-                child = _statewise_crossover(parent_a, parent_b, rng)
+                n_edges = int(rng.integers(n_edges_range[0], n_edges_range[1] + 1))
+                seed = int(rng.integers(0, 2**63 - 1))
+                mutated = mutate_and_validate_native(
+                    child,
+                    n_edges=n_edges,
+                    max_attempts=1000,
+                    dfree_target=dfree_target,
+                    seed=seed,
+                )
+                if mutated is None:
+                    continue
+                next_population.append(mutated[0])
+                next_fitnesses = np.append(next_fitnesses, np.inf)
 
-            n_edges = int(rng.integers(n_edges_range[0], n_edges_range[1] + 1))
-            seed = int(rng.integers(0, 2**63 - 1))
-            mutated = mutate_and_validate_native(
-                child,
-                n_edges=n_edges,
-                max_attempts=1000,
-                dfree_target=dfree_target,
-                seed=seed,
+            population = next_population
+            fitnesses = next_fitnesses
+            offspring_time_s = perf_counter() - offspring_start
+
+        if generation_callback is not None:
+            generation_callback(
+                {
+                    "seed": int(rng_seed),
+                    "generation": int(gen),
+                    "best_fitness": best_so_far,
+                    "mean_fitness": gen_mean,
+                    "std_fitness": gen_std,
+                    "plateau": int(plateau),
+                    "n_evaluated": int(n_evaluated),
+                    "evaluation_time_s": float(eval_time_s),
+                    "offspring_time_s": float(offspring_time_s),
+                    "generation_time_s": float(perf_counter() - gen_start),
+                    "is_complete": bool(should_stop),
+                    "convergence_generation": (
+                        int(convergence_generation)
+                        if convergence_generation is not None
+                        else None
+                    ),
+                }
             )
-            if mutated is None:
-                continue
-            next_population.append(mutated[0])
-            next_fitnesses = np.append(next_fitnesses, np.inf)
 
-        population = next_population
-        fitnesses = next_fitnesses
+        if should_stop:
+            break
 
     if log_path is not None:
         _save_log(log_entries, Path(log_path))
