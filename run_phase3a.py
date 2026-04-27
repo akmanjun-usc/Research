@@ -88,7 +88,7 @@ def main() -> None:
             dfree_target=DFREE_TARGET,
             rng=rng,
         )
-        fitness_fn = functools.partial(fitness_oracle, n_trials=N_TRIALS, snr_db=5.0, inr_db=5.0)
+        fitness_fn = functools.partial(fitness_oracle, n_trials=N_TRIALS, snr_db=3.0, inr_db=5.0)
 
         def progress_callback(snapshot: dict) -> None:
             _update_seed_status(seed_statuses, snapshot)

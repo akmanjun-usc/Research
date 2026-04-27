@@ -188,7 +188,9 @@ def run_ea(
                 }
             )
 
-        should_stop = best_so_far <= 0.0 or plateau >= plateau_patience
+        # Don't treat 0/n_trials as true convergence — at BLER~1e-3 this fires by chance.
+        # Only stop early if best fitness is statistically well below the noise floor (1/n_trials).
+        should_stop = plateau >= plateau_patience
         offspring_time_s = 0.0
 
         if not should_stop:
