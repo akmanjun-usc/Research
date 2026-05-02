@@ -1,0 +1,16 @@
+# Core scientific stack
+numpy==1.26.4
+scipy==1.17.1
+
+# Deep learning
+torch==2.2.2
+
+# Plotting
+matplotlib==3.10.8
+seaborn==0.13.2
+
+# Testing
+pytest==9.0.2
+
+# Optional: FLOPs counter used in compute_cost.py (falls back gracefully if absent)
+# thop>=0.1.1
