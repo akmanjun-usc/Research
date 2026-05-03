@@ -65,42 +65,48 @@ def main() -> None:
         print(_GEN_HEADER, flush=True)
         print(_GEN_SEP, flush=True)
 
+        plateau_patience = 10
+
         def generation_callback(snap: dict) -> None:
             print(_gen_line(snap), flush=True)
             if snap.get("is_complete"):
                 print(_GEN_SEP, flush=True)
-                print(f"  stopped: plateau={snap['plateau']} >= 10", flush=True)
+                print(f"  stopped: plateau={snap['plateau']} >= {plateau_patience}", flush=True)
 
-        result = run_ea(
-            fitness_fn=fitness_fn,
-            init_population=init_pop,
-            n_generations=N_GENERATIONS,
-            pop_size=POP_SIZE,
-            elite_size=2,
-            dfree_target=DFREE_TARGET,
-            plateau_patience=10,
-            rng_seed=rng_seed,
-            log_path=RESULTS_DIR / f"log_seed{rng_seed}.npz",
-            generation_callback=generation_callback,
-        )
-        np.savez(
-            RESULTS_DIR / f"best_trellis_seed{rng_seed}.npz",
-            next_state=result["best_genome"]["next_state"],
-            output_pair=result["best_genome"]["output_pair"],
-            fitness=result["best_fitness"],
-            seed=rng_seed,
-        )
-        np.savez(
-            RESULTS_DIR / f"fitness_curves_seed{rng_seed}.npz",
-            best_per_gen=result["fitness_curves"]["best"],
-            mean_per_gen=result["fitness_curves"]["mean"],
-            std_per_gen=result["fitness_curves"]["std"],
-        )
-        print(
-            f"\nSeed {rng_seed} done: best BLER={result['best_fitness']:.4e}, "
-            f"converged at gen {result.get('convergence_generation', 'N/A')}",
-            flush=True,
-        )
+        result = None
+        try:
+            result = run_ea(
+                fitness_fn=fitness_fn,
+                init_population=init_pop,
+                n_generations=N_GENERATIONS,
+                pop_size=POP_SIZE,
+                elite_size=2,
+                dfree_target=DFREE_TARGET,
+                plateau_patience=plateau_patience,
+                rng_seed=rng_seed,
+                log_path=RESULTS_DIR / f"log_seed{rng_seed}.npz",
+                generation_callback=generation_callback,
+            )
+        finally:
+            if result is not None:
+                np.savez(
+                    RESULTS_DIR / f"best_trellis_seed{rng_seed}.npz",
+                    next_state=result["best_genome"]["next_state"],
+                    output_pair=result["best_genome"]["output_pair"],
+                    fitness=result["best_fitness"],
+                    seed=rng_seed,
+                )
+                np.savez(
+                    RESULTS_DIR / f"fitness_curves_seed{rng_seed}.npz",
+                    best_per_gen=result["fitness_curves"]["best"],
+                    mean_per_gen=result["fitness_curves"]["mean"],
+                    std_per_gen=result["fitness_curves"]["std"],
+                )
+                print(
+                    f"\nSeed {rng_seed} done: best BLER={result['best_fitness']:.4e}, "
+                    f"converged at gen {result.get('convergence_generation', 'N/A')}",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
