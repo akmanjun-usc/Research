@@ -66,7 +66,7 @@ def main() -> None:
         print(f"\n{'='*60}", flush=True)
         print(
             f"Seed {rng_seed}  |  pop={POP_SIZE}  gen={N_GENERATIONS}  "
-            f"trials={N_TRIALS}  SNR=5dB  INR=5dB  device={DEVICE}",
+            f"trials={N_TRIALS}  SNR=3dB  INR=5dB  device={DEVICE}",
             flush=True,
         )
         print(f"{'='*60}", flush=True)
@@ -85,7 +85,7 @@ def main() -> None:
         fitness_fn = functools.partial(
             fitness_n2,
             n_trials=N_TRIALS,
-            snr_db=5.0,
+            snr_db=3.0,
             inr_db=5.0,
             model=model,
             device=DEVICE,
