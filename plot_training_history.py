@@ -5,7 +5,8 @@ Usage:
     python plot_training_history.py --model N2
     python plot_training_history.py --model N2 --history results/phase2b/logs/history_seed42.npz
     python plot_training_history.py --model N1 --history results/phase2a/logs/history_seed42.npz
-    python plot_training_history.py --model N1 --out results/phase2a/figures/training_history_seed42
+    python plot_training_history.py --history results/phase3a/fitness_curves_seed0.npz
+    python plot_training_history.py --model PHASE3A --out results/phase3a/figures/fitness_curves_seed0
 """
 
 from __future__ import annotations
@@ -18,6 +19,19 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from plot_utils import TOL, IEEE_RC
+
+
+def detect_history_format(history_path: Path) -> str:
+    with np.load(history_path) as h:
+        keys = set(h.files)
+
+    if {'train_mse', 'train_mse_h0', 'train_mse_h1', 'train_mse_h2', 'train_mse_h3', 'val_bler', 'val_epoch'} <= keys:
+        return 'N2'
+    if {'train_loss', 'train_bit_acc', 'val_bler', 'val_epoch'} <= keys:
+        return 'N1'
+    if {'best_per_gen', 'mean_per_gen', 'std_per_gen'} <= keys:
+        return 'PHASE3A'
+    raise ValueError(f'Unsupported history format in {history_path}')
 
 
 def plot_training_history_n2(history_path: Path, out_path: Path) -> None:
@@ -147,14 +161,67 @@ def plot_training_history_n1(history_path: Path, out_path: Path) -> None:
         plt.show()
 
 
+def plot_training_history_phase3a(history_path: Path, out_path: Path) -> None:
+    h = np.load(history_path)
+
+    best_per_gen = h['best_per_gen']
+    mean_per_gen = h['mean_per_gen']
+    std_per_gen = h['std_per_gen']
+    generations = np.arange(len(best_per_gen))
+    lower = np.clip(mean_per_gen - std_per_gen, a_min=0.0, a_max=None)
+    upper = mean_per_gen + std_per_gen
+
+    sns.set_theme(style="ticks", font_scale=1.0)
+
+    with plt.rc_context(IEEE_RC):
+        fig, ax = plt.subplots(figsize=(7, 5))
+
+        ax.plot(
+            generations,
+            best_per_gen,
+            color=TOL['blue'],
+            lw=1.8,
+            label='best fitness',
+        )
+        ax.plot(
+            generations,
+            mean_per_gen,
+            color=TOL['green'],
+            lw=1.5,
+            label='mean fitness',
+        )
+        ax.fill_between(
+            generations,
+            lower,
+            upper,
+            color=TOL['green'],
+            alpha=0.18,
+            label='mean ± 1 std',
+        )
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Fitness (BLER)')
+        ax.set_title('Phase 3A Search Fitness Curves')
+        ax.grid(True)
+        ax.legend()
+
+        fig.tight_layout()
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path.with_suffix('.pdf'))
+        fig.savefig(out_path.with_suffix('.png'))
+        print(f"Saved: {out_path.with_suffix('.pdf')}")
+        print(f"Saved: {out_path.with_suffix('.png')}")
+        plt.show()
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Plot N1 or N2 training history')
+    parser = argparse.ArgumentParser(description='Plot training history or search fitness curves')
     parser.add_argument(
         '--model',
         type=str,
-        choices=['N1', 'N2'],
-        required=True,
-        help='Training history format to plot',
+        choices=['N1', 'N2', 'PHASE3A'],
+        default=None,
+        help='Training history format to plot. If omitted, infer from the .npz keys.',
     )
     parser.add_argument(
         '--history',
@@ -170,11 +237,15 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    if args.model == 'N1':
-        history_path = args.history or Path('results/phase2a/logs/history_seed42.npz')
+    history_path = args.history or Path('results/phase3a/fitness_curves_seed0.npz')
+    model = args.model or detect_history_format(history_path)
+
+    if model == 'N1':
         out_path = args.out or Path('results/phase2a/figures/training_history_seed42')
         plot_training_history_n1(history_path, out_path)
-    else:
-        history_path = args.history or Path('results/phase2b/logs/history_seed42.npz')
+    elif model == 'N2':
         out_path = args.out or Path('results/phase2b/figures/training_history_seed42')
         plot_training_history_n2(history_path, out_path)
+    else:
+        out_path = args.out or Path('results/phase3a/figures/fitness_curves_seed0')
+        plot_training_history_phase3a(history_path, out_path)

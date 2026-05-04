@@ -58,4 +58,24 @@ def fitness_n2(
     model=None,
     device: str = "cpu",
 ) -> float:
-    raise NotImplementedError("fitness_n2 is implemented in Phase 3b")
+    from neural_bm import build_branch_output_index, make_decoder_n2
+
+    trellis = genome_to_trellis(genome)
+
+    def encode_fn(info_bits):
+        return bpsk_modulate(_encode_fixed_tail(info_bits, trellis))
+
+    index_table = build_branch_output_index(trellis)
+    decode_fn = make_decoder_n2(model, device, trellis, index_table)
+
+    result = estimate_bler(
+        encode_fn,
+        decode_fn,
+        awgn_channel,
+        snr_db=snr_db,
+        inr_db=inr_db,
+        n_trials=n_trials,
+        seed=seed,
+        early_stop_errors=100,
+    )
+    return float(result["bler"])
