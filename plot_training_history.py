@@ -161,7 +161,7 @@ def plot_training_history_n1(history_path: Path, out_path: Path) -> None:
         plt.show()
 
 
-def plot_training_history_phase3a(history_path: Path, out_path: Path) -> None:
+def plot_training_history_phase3a(history_path: Path, out_path: Path, title: str = 'Phase 3A Search Fitness Curves') -> None:
     h = np.load(history_path)
 
     best_per_gen = h['best_per_gen']
@@ -200,7 +200,7 @@ def plot_training_history_phase3a(history_path: Path, out_path: Path) -> None:
         )
         ax.set_xlabel('Generation')
         ax.set_ylabel('Fitness (BLER)')
-        ax.set_title('Phase 3A Search Fitness Curves')
+        ax.set_title(title)
         ax.grid(True)
         ax.legend()
 
@@ -219,7 +219,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--model',
         type=str,
-        choices=['N1', 'N2', 'PHASE3A'],
+        choices=['N1', 'N2', 'PHASE3A', 'PHASE3B'],
         default=None,
         help='Training history format to plot. If omitted, infer from the .npz keys.',
     )
@@ -246,6 +246,9 @@ if __name__ == '__main__':
     elif model == 'N2':
         out_path = args.out or Path('results/phase2b/figures/training_history_seed42')
         plot_training_history_n2(history_path, out_path)
+    elif model == 'PHASE3B':
+        out_path = args.out or Path('results/phase3b/figures/fitness_curves_seed0')
+        plot_training_history_phase3a(history_path, out_path, title='Phase 3B Search Fitness Curves')
     else:
         out_path = args.out or Path('results/phase3a/figures/fitness_curves_seed0')
         plot_training_history_phase3a(history_path, out_path)
