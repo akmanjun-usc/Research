@@ -67,6 +67,7 @@ METHOD_STYLE = {
     'S1_searched_gru':        {'color': TOL['cyan'],   'marker': '*',  'ls': '-',   'label': 'Searched + GRU (S1)', 'lw': 2.5},
     'B3_random_trellis':      {'color': TOL['grey'],   'marker': 'x',  'ls': ':',   'label': 'Random Trellis (B3)'},
     'S1_oracle_viterbi':      {'color': '#EE7733',     'marker': '*',  'ls': '-',   'label': 'Searched + Oracle (S1-oracle)', 'lw': 2.0},
+    'S1_neural_bm':           {'color': TOL['cyan'],   'marker': 'P',  'ls': '-',   'label': 'Searched + Neural BM (S1)',     'lw': 2.0},
     'Uncoded_BPSK_theory':    {'color': 'black',       'marker': '',   'ls': ':',   'label': 'Uncoded BPSK (theory)', 'lw': 1.0},
 }
 

@@ -886,14 +886,147 @@ def run_phase3a(
     print(f"\nFigures saved to: {fig_dir}")
 
 
+def run_phase3b_eval(
+    genome_path: Optional[str] = None,
+    n_trials: int = 10_000,
+    snr_range: Optional[np.ndarray] = None,
+    inr_db: float = 5.0,
+    seed: int = 0,
+    checkpoint_path: Optional[str] = None,
+    device: str = "",
+) -> None:
+    """
+    Phase 3b: Searched Trellis + N2 Neural BM evaluation.
+
+    Loads Phase 1, Phase 2b, and Phase 3a results from disk (no re-run),
+    runs a fresh SNR and INR sweep for the best Phase 3b genome with the
+    frozen N2 decoder, then plots all curves together.
+    """
+    from trellis_genome import genome_to_trellis as _genome_to_trellis
+    from neural_bm import (
+        load_model as load_n2_model, make_decoder_n2,
+        build_branch_output_index,
+    )
+
+    if snr_range is None:
+        snr_range = np.arange(0, 11, 1, dtype=float)
+
+    resolved_genome = Path(genome_path) if genome_path else RESULTS_DIR / "phase3b" / "best_trellis_seed0.npz"
+    n2_checkpoint   = Path(checkpoint_path) if checkpoint_path else Path("results/phase2b/checkpoints/best_model_seed32.pt")
+    dev = device if device else ("cuda" if __import__("torch").cuda.is_available() else "cpu")
+
+    print("=" * 60)
+    print("Phase 3b: Searched Trellis + N2 Neural BM Evaluation")
+    print(f"  Genome:     {resolved_genome}")
+    print(f"  Checkpoint: {n2_checkpoint}")
+    print(f"  INR = {inr_db} dB,  n_trials = {n_trials},  seed = {seed}")
+    print("=" * 60)
+
+    bt = np.load(resolved_genome)
+    genome = {"next_state": bt["next_state"], "output_pair": bt["output_pair"], "n_states": 64}
+    trellis = _genome_to_trellis(genome)
+    print(f"  EA proxy fitness (BLER at eval point): {float(bt['fitness']):.4e}\n")
+
+    n2_model, _ = load_n2_model(n2_checkpoint)
+    index_table  = build_branch_output_index(trellis)
+    encode_fn    = make_encoder(trellis)
+    decode_fn    = make_decoder_n2(n2_model, dev, trellis, index_table)
+
+    phase3b_dir = RESULTS_DIR / "phase3b"
+    phase3a_dir = RESULTS_DIR / "phase3a"
+    phase1_dir  = RESULTS_DIR / "phase1"
+    phase2b_dir = RESULTS_DIR / "phase2b"
+    fig_dir     = phase3b_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── SNR sweep ──
+    print("Loading Phase 1 SNR sweep results from disk...")
+    snr_results = {
+        'B1_mismatched_viterbi':  _load_snr_sweep(phase1_dir / f"bler_B1_mismatched_viterbi_inr{inr_db:.0f}dB.npz"),
+        'B2_oracle_viterbi':      _load_snr_sweep(phase1_dir / f"bler_B2_oracle_viterbi_inr{inr_db:.0f}dB.npz"),
+        'B5_interference_cancel': _load_snr_sweep(phase1_dir / f"bler_B5_interference_cancel_inr{inr_db:.0f}dB.npz"),
+    }
+    print("Loading Phase 2b SNR sweep results from disk...")
+    snr_results['N2_neural_bm'] = _load_snr_sweep(
+        phase2b_dir / f"bler_N2_neural_bm_inr{inr_db:.0f}dB_seed32.npz"
+    )
+    print("Loading Phase 3a SNR sweep results from disk...")
+    s3a_snr_path = phase3a_dir / f"bler_S1_oracle_viterbi_inr{inr_db:.0f}dB.npz"
+    if s3a_snr_path.exists():
+        snr_results['S1_oracle_viterbi'] = _load_snr_sweep(s3a_snr_path)
+
+    print("Running S1-neural-bm SNR sweep...")
+    s1_snr = sweep_snr(
+        {'S1_neural_bm': (encode_fn, decode_fn)},
+        snr_range, inr_db, n_trials,
+        results_dir=phase3b_dir, tag="bler", seed=seed,
+    )
+    snr_results['S1_neural_bm'] = s1_snr['S1_neural_bm']
+
+    plot_bler_vs_snr(
+        snr_results, inr_db=inr_db,
+        save_path=fig_dir / "phase3b_bler_vs_snr",
+        title="Phase 3b: Searched Trellis + N2 vs Baselines",
+    )
+
+    # ── INR sweep ──
+    inr_range = np.arange(-5, 15.01, 2.5)
+    snr_fixed = 5.0
+    print(f"\nLoading Phase 1 INR sweep results from disk...")
+    inr_results = {
+        'B1_mismatched_viterbi':  _load_inr_sweep(phase1_dir / f"bler_inr_B1_mismatched_viterbi_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+        'B2_oracle_viterbi':      _load_inr_sweep(phase1_dir / f"bler_inr_B2_oracle_viterbi_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+        'B5_interference_cancel': _load_inr_sweep(phase1_dir / f"bler_inr_B5_interference_cancel_snr{snr_fixed:.0f}dB_inr_sweep.npz"),
+    }
+    print("Loading Phase 2b INR sweep results from disk...")
+    inr_results['N2_neural_bm'] = _load_inr_sweep(
+        phase2b_dir / f"bler_inr_N2_neural_bm_snr{snr_fixed:.0f}dB_inr_sweep_seed32.npz"
+    )
+    s3a_inr_path = phase3a_dir / f"bler_inr_S1_oracle_viterbi_snr{snr_fixed:.0f}dB_inr_sweep.npz"
+    if s3a_inr_path.exists():
+        inr_results['S1_oracle_viterbi'] = _load_inr_sweep(s3a_inr_path)
+
+    print(f"Running S1-neural-bm INR sweep: SNR = {snr_fixed} dB")
+    s1_inr = sweep_inr(
+        {'S1_neural_bm': (encode_fn, decode_fn)},
+        inr_range, snr_db=snr_fixed, n_trials=n_trials,
+        results_dir=phase3b_dir, tag="bler_inr", seed=seed,
+    )
+    inr_results['S1_neural_bm'] = s1_inr['S1_neural_bm']
+
+    plot_bler_vs_inr(
+        inr_results, snr_db=snr_fixed,
+        save_path=fig_dir / "phase3b_bler_vs_inr",
+    )
+
+    # ── Summary table ──
+    from plot_utils import db_gain
+    print("\n--- SNR sweep summary (INR = {:.0f} dB) ---".format(inr_db))
+    print(f"  {'Method':<30} {'BLER @ 5 dB':>12}")
+    for name, pts in snr_results.items():
+        print(f"  {name:<30} {_get_bler_at_snr(pts):>12.3e}")
+
+    try:
+        snr_s1  = np.array([p['snr_db'] for p in snr_results['S1_neural_bm']])
+        bler_s1 = np.array([p['bler']   for p in snr_results['S1_neural_bm']])
+        snr_n2  = np.array([p['snr_db'] for p in snr_results['N2_neural_bm']])
+        bler_n2 = np.array([p['bler']   for p in snr_results['N2_neural_bm']])
+        gain = db_gain(1e-3, snr_s1, bler_s1, snr_n2, bler_n2)
+        print(f"\n  S1 vs N2 gain at BLER=1e-3: {gain:+.2f} dB")
+    except Exception as e:
+        print(f"\n  Could not compute dB gain: {e}")
+
+    print(f"\nFigures saved to: {fig_dir}")
+
+
 # ─────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="BLER evaluation")
-    parser.add_argument('--phase', type=int, default=1, choices=[1, 2, 3],
-                        help='Phase to run (1, 2, or 3)')
+    parser.add_argument('--phase', type=int, default=1, choices=[1, 2, 3, 4],
+                        help='Phase to run (1, 2, 3=3a oracle, 4=3b neural)')
     parser.add_argument('--n-trials', type=int, default=10000,
                         help='Monte Carlo trials per SNR point')
     parser.add_argument('--inr-db', type=float, default=5.0,
@@ -947,4 +1080,14 @@ if __name__ == "__main__":
             snr_range=snr_range,
             inr_db=args.inr_db,
             seed=args.seed,
+        )
+    elif args.phase == 4:
+        run_phase3b_eval(
+            genome_path=args.genome,
+            n_trials=args.n_trials,
+            snr_range=snr_range,
+            inr_db=args.inr_db,
+            seed=args.seed,
+            checkpoint_path=args.checkpoint,
+            device=args.device,
         )
