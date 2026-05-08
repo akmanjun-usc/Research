@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.9.8)  10 APR 2026 18:06
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.9.8)  4 MAY 2026 17:59
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -549,63 +549,62 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 
 [1{/usr/local/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/base/8r.enc}]
 
-[2]
-
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
-LaTeX Font Info:    Trying to load font information for OT1+pcr on input line 294.
-(/usr/local/texlive/2025/texmf-dist/tex/latex/psnfss/ot1pcr.fd
-File: ot1pcr.fd 2001/06/04 font definitions for OT1/pcr.
-)
+
+
+[2]
 
 [3]
-<../results/phase1/figures/phase1_bler_vs_snr.pdf, id=212, 498.52928pt x 388.65201pt>
+LaTeX Font Info:    Trying to load font information for OT1+pcr on input line 312.
+ (/usr/local/texlive/2025/texmf-dist/tex/latex/psnfss/ot1pcr.fd
+File: ot1pcr.fd 2001/06/04 font definitions for OT1/pcr.
+)
+<../results/phase1/figures/phase1_bler_vs_snr.pdf, id=229, 498.52928pt x 388.65201pt>
 File: ../results/phase1/figures/phase1_bler_vs_snr.pdf Graphic file (type pdf)
 <use ../results/phase1/figures/phase1_bler_vs_snr.pdf>
-Package pdftex.def Info: ../results/phase1/figures/phase1_bler_vs_snr.pdf  used on input line 325.
+Package pdftex.def Info: ../results/phase1/figures/phase1_bler_vs_snr.pdf  used on input line 343.
 (pdftex.def)             Requested size: 361.19843pt x 281.6024pt.
 
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
-<../results/phase1/figures/phase1_bler_vs_inr.pdf, id=217, 498.49916pt x 388.65201pt>
+<../results/phase1/figures/phase1_bler_vs_inr.pdf, id=234, 498.49916pt x 388.65201pt>
 File: ../results/phase1/figures/phase1_bler_vs_inr.pdf Graphic file (type pdf)
 <use ../results/phase1/figures/phase1_bler_vs_inr.pdf>
-Package pdftex.def Info: ../results/phase1/figures/phase1_bler_vs_inr.pdf  used on input line 355.
+Package pdftex.def Info: ../results/phase1/figures/phase1_bler_vs_inr.pdf  used on input line 373.
 (pdftex.def)             Requested size: 361.19843pt x 281.6202pt.
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
 
 
-[4 <../results/phase1/figures/phase1_bler_vs_snr.pdf>]
+[4]
 
-[5 <../results/phase1/figures/phase1_bler_vs_inr.pdf>]
+[5 <../results/phase1/figures/phase1_bler_vs_snr.pdf> <../results/phase1/figures/phase1_bler_vs_inr.pdf>]
 
 [6]
 
-LaTeX Warning: `!h' float specifier changed to `!ht'.
-
-
-Overfull \hbox (38.85022pt too wide) in paragraph at lines 567--573
+[7]
+Overfull \hbox (38.85022pt too wide) in paragraph at lines 585--591
 []\OT1/ptm/b/n/12 Seed 32 (ex-ter-nal nor-mal-iza-tion): \OT1/ptm/m/n/12 Train-ing tar-gets are the raw un-nor-mal-ized dis-tances $\OMS/cmsy/m/n/12 ^^@ [][]$\OT1/ptm/m/n/12 .
  []
 
 
+LaTeX Warning: `!h' float specifier changed to `!ht'.
 
-[7]
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
-<../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf, id=364, 498.86299pt x 389.1727pt>
+<../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf, id=382, 498.86299pt x 389.1727pt>
 File: ../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf Graphic file (type pdf)
 <use ../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf  used on input line 655.
+Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf  used on input line 673.
 (pdftex.def)             Requested size: 247.6778pt x 193.21411pt.
-<../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf, id=365, 498.86299pt x 389.1727pt>
+<../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf, id=383, 498.86299pt x 389.1727pt>
 File: ../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf Graphic file (type pdf)
 <use ../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf  used on input line 661.
+Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf  used on input line 679.
 (pdftex.def)             Requested size: 247.6778pt x 193.21411pt.
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
@@ -613,84 +612,158 @@ LaTeX Warning: `!h' float specifier changed to `!ht'.
 
 
 [8]
-<../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf, id=380, 498.82849pt x 389.1727pt>
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+<../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf, id=401, 498.82849pt x 389.1727pt>
 File: ../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf Graphic file (type pdf)
 <use ../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf  used on input line 704.
+Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf  used on input line 722.
 (pdftex.def)             Requested size: 247.6778pt x 193.23193pt.
-<../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf, id=381, 498.82849pt x 389.1727pt>
+<../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf, id=402, 498.82849pt x 389.1727pt>
 File: ../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf Graphic file (type pdf)
 <use ../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf  used on input line 710.
+Package pdftex.def Info: ../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf  used on input line 728.
 (pdftex.def)             Requested size: 247.6778pt x 193.23193pt.
-
-
-LaTeX Warning: `!h' float specifier changed to `!ht'.
-
-<../results/phase2b/figures/training_history_seed32.pdf, id=386, 1076.20073pt x 356.70453pt>
-File: ../results/phase2b/figures/training_history_seed32.pdf Graphic file (type pdf)
-<use ../results/phase2b/figures/training_history_seed32.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/training_history_seed32.pdf  used on input line 736.
-(pdftex.def)             Requested size: 438.60315pt x 145.37349pt.
-<../results/phase2b/figures/training_history_seed42.pdf, id=387, 1076.32117pt x 356.70453pt>
-File: ../results/phase2b/figures/training_history_seed42.pdf Graphic file (type pdf)
-<use ../results/phase2b/figures/training_history_seed42.pdf>
-Package pdftex.def Info: ../results/phase2b/figures/training_history_seed42.pdf  used on input line 742.
-(pdftex.def)             Requested size: 438.60315pt x 145.35716pt.
-
-LaTeX Warning: `!h' float specifier changed to `!ht'.
-
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
 
 
 [9 <../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf> <../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf>]
+<../results/phase2b/figures/training_history_seed32.pdf, id=526, 1076.20073pt x 356.70453pt>
+File: ../results/phase2b/figures/training_history_seed32.pdf Graphic file (type pdf)
+<use ../results/phase2b/figures/training_history_seed32.pdf>
+Package pdftex.def Info: ../results/phase2b/figures/training_history_seed32.pdf  used on input line 754.
+(pdftex.def)             Requested size: 438.60315pt x 145.37349pt.
+<../results/phase2b/figures/training_history_seed42.pdf, id=527, 1076.32117pt x 356.70453pt>
+File: ../results/phase2b/figures/training_history_seed42.pdf Graphic file (type pdf)
+<use ../results/phase2b/figures/training_history_seed42.pdf>
+Package pdftex.def Info: ../results/phase2b/figures/training_history_seed42.pdf  used on input line 760.
+(pdftex.def)             Requested size: 438.60315pt x 145.35716pt.
 
-[10 <../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf> <../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf> <../results/phase2b/figures/training_history_seed32.pdf> <../results/phase2b/figures/training_history_seed42.pdf>]
 
-[11]
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+
+[10 <../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf> <../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf>]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 778.
+(hyperref)                removing `math shift' on input line 796.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 778.
+(hyperref)                removing `math shift' on input line 796.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 778.
+(hyperref)                removing `math shift' on input line 796.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 778.
+(hyperref)                removing `math shift' on input line 796.
 
 
+
+[11 <../results/phase2b/figures/training_history_seed32.pdf> <../results/phase2b/figures/training_history_seed42.pdf>]
 
 [12]
+<../results/phase3a/figures/fitness_curves_seed0.pdf, id=774, 498.07831pt x 352.5697pt>
+File: ../results/phase3a/figures/fitness_curves_seed0.pdf Graphic file (type pdf)
+<use ../results/phase3a/figures/fitness_curves_seed0.pdf>
+Package pdftex.def Info: ../results/phase3a/figures/fitness_curves_seed0.pdf  used on input line 953.
+(pdftex.def)             Requested size: 361.19843pt x 255.68448pt.
 
-[13] (./report.aux)
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+
+[13]
+<../results/phase3a/figures/phase3a_bler_vs_snr.pdf, id=784, 498.52928pt x 388.65201pt>
+File: ../results/phase3a/figures/phase3a_bler_vs_snr.pdf Graphic file (type pdf)
+<use ../results/phase3a/figures/phase3a_bler_vs_snr.pdf>
+Package pdftex.def Info: ../results/phase3a/figures/phase3a_bler_vs_snr.pdf  used on input line 988.
+(pdftex.def)             Requested size: 361.19843pt x 281.6024pt.
+
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+<../results/phase3a/figures/phase3a_bler_vs_inr.pdf, id=786, 498.49916pt x 388.65201pt>
+File: ../results/phase3a/figures/phase3a_bler_vs_inr.pdf Graphic file (type pdf)
+<use ../results/phase3a/figures/phase3a_bler_vs_inr.pdf>
+Package pdftex.def Info: ../results/phase3a/figures/phase3a_bler_vs_inr.pdf  used on input line 1006.
+(pdftex.def)             Requested size: 361.19843pt x 281.6202pt.
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+
+[14 <../results/phase3a/figures/fitness_curves_seed0.pdf>]
+
+LaTeX Warning: Text page 15 contains only floats.
+
+
+
+[15 <../results/phase3a/figures/phase3a_bler_vs_snr.pdf> <../results/phase3a/figures/phase3a_bler_vs_inr.pdf>]
+<../results/phase3b/figures/fitness_curves_seed0.pdf, id=954, 498.07831pt x 352.5697pt>
+File: ../results/phase3b/figures/fitness_curves_seed0.pdf Graphic file (type pdf)
+<use ../results/phase3b/figures/fitness_curves_seed0.pdf>
+Package pdftex.def Info: ../results/phase3b/figures/fitness_curves_seed0.pdf  used on input line 1041.
+(pdftex.def)             Requested size: 361.19843pt x 255.68448pt.
+
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+<../results/phase3b/figures/phase3b_bler_vs_snr.pdf, id=958, 498.52928pt x 388.65201pt>
+File: ../results/phase3b/figures/phase3b_bler_vs_snr.pdf Graphic file (type pdf)
+<use ../results/phase3b/figures/phase3b_bler_vs_snr.pdf>
+Package pdftex.def Info: ../results/phase3b/figures/phase3b_bler_vs_snr.pdf  used on input line 1088.
+(pdftex.def)             Requested size: 361.19843pt x 281.6024pt.
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+<../results/phase3b/figures/phase3b_bler_vs_inr.pdf, id=961, 498.49916pt x 388.65201pt>
+File: ../results/phase3b/figures/phase3b_bler_vs_inr.pdf Graphic file (type pdf)
+<use ../results/phase3b/figures/phase3b_bler_vs_inr.pdf>
+Package pdftex.def Info: ../results/phase3b/figures/phase3b_bler_vs_inr.pdf  used on input line 1120.
+(pdftex.def)             Requested size: 361.19843pt x 281.6202pt.
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+
+[16 <../results/phase3b/figures/fitness_curves_seed0.pdf>]
+
+[17 <../results/phase3b/figures/phase3b_bler_vs_snr.pdf>]
+
+[18 <../results/phase3b/figures/phase3b_bler_vs_inr.pdf>]
+
+[19] (./report.aux)
  ***********
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
  ***********
 Package rerunfilecheck Info: File `report.out' has not changed.
-(rerunfilecheck)             Checksum: 7A8587BD4A03F064E3CA5098BE2A40FA;6108.
+(rerunfilecheck)             Checksum: 3C305F3CE68810887980D35A7D6FA15B;7177.
  ) 
 Here is how much of TeX's memory you used:
- 18093 strings out of 473190
- 350717 string characters out of 5715801
- 735924 words of memory out of 5000000
- 41045 multiletter control sequences out of 15000+600000
+ 18178 strings out of 473190
+ 353877 string characters out of 5715801
+ 735912 words of memory out of 5000000
+ 41105 multiletter control sequences out of 15000+600000
  604391 words of font info for 133 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,12n,79p,480b,1125s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,12n,79p,494b,1129s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi12.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi9.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr12.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/urw/courier/ucrr8a.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/urw/times/utmbi8a.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2025/texmf-dist/fonts/type1/urw/times/utmri8a.pfb>
-Output written on report.pdf (13 pages, 461575 bytes).
+Output written on report.pdf (19 pages, 601421 bytes).
 PDF statistics:
- 883 PDF objects out of 1000 (max. 8388607)
- 410 compressed objects within 5 object streams
- 99 named destinations out of 1000 (max. 500000)
- 329 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 1272 PDF objects out of 1440 (max. 8388607)
+ 509 compressed objects within 6 object streams
+ 124 named destinations out of 1000 (max. 500000)
+ 399 words of extra memory for PDF output out of 10000 (max. 10000000)
 

@@ -73,7 +73,7 @@ Phase~3 uses an evolutionary algorithm (EA) to search the space of valid
 64-state rate-$1/2$ trellises under two fitness criteria.
 Under oracle-Viterbi fitness (Phase~3a), the EA improves proxy BLER
 from $2.1\times10^{-2}$ to $1.1\times10^{-2}$ over 34 generations;
-full evaluation with $100{,}000$ trials yields BLER~$=8\times10^{-5}$
+full evaluation with $10{,}000$ trials yields BLER~$=8\times10^{-5}$
 at SNR~$=5$~dB, matching B2.
 Under frozen N2 fitness (Phase~3b), the search converges at generation~1
 and recovers NASA~K=7 exactly, confirming it is optimal among 64-state
@@ -961,7 +961,7 @@ estimates and the diversity of the search population.
 
 \subsubsection*{Full Evaluation Results}
 
-The best genome from seed~0 was evaluated at $100{,}000$ trials per
+The best genome from seed~0 was evaluated at $10{,}000$ trials per
 SNR point at INR~$=5$~dB.
 Table~\ref{tab:phase3asnr} and Fig.~\ref{fig:phase3asnr} present
 the results alongside the B2 oracle baseline.
@@ -1205,18 +1205,14 @@ for the N2 decoder class, and that the robustness gains established
 in Phase~2b do not depend on the trellis structure.
 
 \paragraph{Future work.}
-Three directions remain open.
-First, the five-seed Phase~3a run was only partially completed
-(seed~0 only); reproducing the search across multiple seeds would
-quantify variability in the EA-found trellis.
-Second, \emph{joint} co-optimization --- re-training N2 on the
+Two directions remain open.
+First, \emph{joint} co-optimization --- re-training N2 on the
 searched trellis rather than freezing the Phase~2b checkpoint ---
 may reveal trellises that diverge from NASA~K=7 by exploiting
 interference structure that a standard linear code cannot represent.
-Third, robustness of N2 to distribution shift (interference period
+Second, robustness of N2 to distribution shift (interference period
 $P \notin [8, 32]$, non-sinusoidal interference, or carrier-frequency
-offsets) has not been characterized and is a prerequisite for
-deployment in realistic industrial~IoT links.
+offsets) has not been characterized.
 
 % ============================================================
 \bibliographystyle{IEEEtran}

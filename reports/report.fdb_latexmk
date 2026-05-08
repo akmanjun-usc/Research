@@ -1,5 +1,5 @@
 # Fdb version 4
-["pdflatex"] 1775869565.43641 "/Users/admin/Documents/abhishek/ee597/Research/reports/report.tex" "report.pdf" "report" 1775869567.21604 0
+["pdflatex"] 1777942760.79219 "/Users/admin/Documents/abhishek/ee597/Research/reports/report.tex" "report.pdf" "report" 1777942763.66183 0
   "../results/phase1/figures/phase1_bler_vs_inr.pdf" 1774915568.09723 21510 6af6a24a24a6d25189b43ecea3c763ae ""
   "../results/phase1/figures/phase1_bler_vs_snr.pdf" 1774915268.80746 23638 45b28297691da4b6ac078f72a1f9870f ""
   "../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf" 1775837478.36341 17884 d4d161d1ffbf836e8f427a8c79f40d46 ""
@@ -8,7 +8,13 @@
   "../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf" 1775732360.17947 20261 237cd31fc8ee7425a4a50f3e523179a8 ""
   "../results/phase2b/figures/training_history_seed32.pdf" 1775785469.24161 36211 582a0138c0b74f8e1d6c859737b303dc ""
   "../results/phase2b/figures/training_history_seed42.pdf" 1775726536.85831 37902 e20daec221aa9e37b1acb4e56f6e7d92 ""
-  "/Users/admin/Documents/abhishek/ee597/Research/reports/report.tex" 1775869563.31393 39326 79dd8849f0c9a873b85cfe9513f2c3f3 ""
+  "../results/phase3a/figures/fitness_curves_seed0.pdf" 1777844563.21643 21045 2414f43cdb1959af245523e2770cff09 ""
+  "../results/phase3a/figures/phase3a_bler_vs_inr.pdf" 1777836415.77062 22658 8f12ef4b724785b751a7903fa7d9886a ""
+  "../results/phase3a/figures/phase3a_bler_vs_snr.pdf" 1777837977.6101 24796 1bf15f00fb9b422a0f4f147d6c762240 ""
+  "../results/phase3b/figures/fitness_curves_seed0.pdf" 1777941147.44568 19245 a7f245d17fe5422c40f212587a2a1662 ""
+  "../results/phase3b/figures/phase3b_bler_vs_inr.pdf" 1777925996.59444 23080 678476411c923c153d5afea80915f44e ""
+  "../results/phase3b/figures/phase3b_bler_vs_snr.pdf" 1777924799.77618 25321 9efd613c44eeb20af6eef7c687d01a3f ""
+  "/Users/admin/Documents/abhishek/ee597/Research/reports/report.tex" 1777942760.49796 53723 24b66ff39632fb82b9d90e39a3e862ec ""
   "/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2025/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/tfm/adobe/courier/pcrr7t.tfm" 1136768653 960 379cc0019370a9e0208a0a3f949f847a ""
@@ -158,9 +164,9 @@
   "/usr/local/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1757362924 5467155 19efa205003f9ecad95fbbaa6ff24da1 ""
   "/usr/local/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt" 1757362591 3345733 ca74c5a5c94e4695c05b68f1c6e76cef ""
   "/usr/local/texlive/2025/texmf.cnf" 1741450484 577 418a7058ec8e006d8704f60ecd22c938 ""
-  "report.aux" 1775869566.93895 12666 5d6ccfaa83ac21f26e36e5978e5e0a79 "pdflatex"
-  "report.out" 1775869566.94144 6108 7a8587bd4a03f064e3ca5098be2a40fa "pdflatex"
-  "report.tex" 1775869563.31393 39326 79dd8849f0c9a873b85cfe9513f2c3f3 ""
+  "report.aux" 1777942763.41462 18868 f2c6d541116216933b16a66ad7a8189c "pdflatex"
+  "report.out" 1777942763.41847 7177 3c305f3ce68810887980d35a7d6fa15b "pdflatex"
+  "report.tex" 1777942760.49796 53723 24b66ff39632fb82b9d90e39a3e862ec ""
   (generated)
   "report.aux"
   "report.log"

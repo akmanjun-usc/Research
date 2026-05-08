@@ -64,10 +64,15 @@ def fitness_n2(
     inr_db: float = 5.0,
     model=None,
     device: str = "cpu",
+    early_stop_errors: int = 0,
+    chunk_size: int = 50,
 ) -> float:
     """
-    Batched N2 fitness: runs all n_trials through the GRU in one forward pass
-    instead of n_trials separate calls, giving ~100x speedup on CPU.
+    Batched N2 fitness: processes trials in chunks through the GRU.
+
+    If early_stop_errors > 0, aborts once cumulative block errors reach that
+    threshold and returns the partial BLER estimate. This lets bad codes fail
+    fast without running all n_trials.
     """
     from neural_bm import build_branch_output_index, pair_received_signal
     from phase3_native import viterbi_neural_bm_native
@@ -79,37 +84,44 @@ def fitness_n2(
     rng = np.random.default_rng(seed)
     noise_var = noise_var_from_snr(snr_db)
     amp = amplitude_from_inr(inr_db, noise_var)
-
-    # Generate all trials: encode + channel
-    info_bits_list = []
-    received_list = []
-    for _ in range(n_trials):
-        info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
-        period = rng.integers(8, 33)
-        phase = rng.uniform(0.0, 2.0 * np.pi)
-        coded = bpsk_modulate(_encode_fixed_tail(info_bits, trellis))
-        noise = rng.standard_normal(len(coded)) * np.sqrt(noise_var)
-        interf = generate_interference(len(coded), amp, period, phase)
-        info_bits_list.append(info_bits)
-        received_list.append(coded + noise + interf)
-
-    # Batch NN inference: one forward pass for all trials
-    received_arr = np.stack(received_list)             # (n_trials, N)
-    paired = pair_received_signal(received_arr)        # (n_trials, T, 2)
     dev = torch.device(device)
-    x = torch.tensor(paired, dtype=torch.float32, device=dev)
-    with torch.no_grad():
-        nn_out = model(x)                              # (n_trials, T, 4)
-    bm_batch = nn_out.cpu().numpy() / (2.0 * float(noise_var))  # (n_trials, T, 4)
-    T = bm_batch.shape[1]
 
-    # Viterbi per trial using C extension (sequential — DP is inherently serial)
     n_errors = 0
-    for i in range(n_trials):
-        decoded = viterbi_neural_bm_native(
-            bm_batch[i], trellis.next_state, index_table, S, T, K_INFO
-        )
-        if not np.array_equal(info_bits_list[i], decoded):
-            n_errors += 1
+    n_done = 0
 
-    return float(n_errors / n_trials)
+    while n_done < n_trials:
+        batch = min(chunk_size, n_trials - n_done)
+
+        info_bits_list = []
+        received_list = []
+        for _ in range(batch):
+            info_bits = rng.integers(0, 2, K_INFO, dtype=np.int8)
+            period = rng.integers(8, 33)
+            phase = rng.uniform(0.0, 2.0 * np.pi)
+            coded = bpsk_modulate(_encode_fixed_tail(info_bits, trellis))
+            noise = rng.standard_normal(len(coded)) * np.sqrt(noise_var)
+            interf = generate_interference(len(coded), amp, period, phase)
+            info_bits_list.append(info_bits)
+            received_list.append(coded + noise + interf)
+
+        received_arr = np.stack(received_list)
+        paired = pair_received_signal(received_arr)
+        x = torch.tensor(paired, dtype=torch.float32, device=dev)
+        with torch.no_grad():
+            nn_out = model(x)
+        bm_chunk = nn_out.cpu().numpy() / (2.0 * float(noise_var))
+        T = bm_chunk.shape[1]
+
+        for i in range(batch):
+            decoded = viterbi_neural_bm_native(
+                bm_chunk[i], trellis.next_state, index_table, S, T, K_INFO
+            )
+            if not np.array_equal(info_bits_list[i], decoded):
+                n_errors += 1
+
+        n_done += batch
+
+        if early_stop_errors > 0 and n_errors >= early_stop_errors:
+            break
+
+    return float(n_errors / n_done)
