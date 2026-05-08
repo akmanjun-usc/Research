@@ -87,13 +87,13 @@ project/
 | B5 | NASA K=7 | IC (FFT cancel) + Viterbi | ✅ Phase 1 complete |
 | N1 | NASA K=7 | BiGRU end-to-end | ✅ Phase 2a — **negative result** (BLER=1.0) |
 | N2 | NASA K=7 | Neural BM + Viterbi (seed32 checkpoint) | ✅ Phase 2b — BLER=2.50e-3 @ 5dB/5dB |
-| B3 | Random valid | N2 | ⬜ Phase 3b prerequisite (not yet run) |
+| B3 | Random valid (d_free≥8) | N2 | ✅ Phase 3c — **negative result**; best of 498 random trellises = 1.33e-1 @ 4dB/5dB (9× worse than N2) |
 | S1-oracle | Searched (3a) | Oracle Viterbi | ✅ Phase 3a — seed0 complete; best BLER=2.58e-2 @ 3dB/5dB |
 | S1 | Searched (3b) | N2 | ✅ Phase 3b — seed0 complete; best BLER=6.35e-2 @ 3dB/5dB |
 
 ---
 
-## Current State (2026-05-07)
+## Current State (2026-05-08)
 
 ### Completed
 - **Phase 1** (B1, B2, B5): BLER curves, compute tables, all tests passing.
@@ -128,15 +128,30 @@ Results in `results/phase3b/` — fitness curves, BLER vs SNR/INR plots, best tr
 
 **Note**: The searched trellis (S1) converged to NASA K=7, confirming the N2 decoder generalizes to searched trellises but the EA finds no improvement over the baseline.
 
+### Phase 3c — Attempted, negative result, code deleted
+Goal was to search for a non-NASA trellis where a frozen N2 decoder achieves low BLER.
+
+**Experiment**: Generated 498 random valid trellises (d_free ≥ 8) and evaluated each with N2.
+- At SNR=8dB/INR=5dB: 498/500 candidates appeared good (BLER ≈ 0 with 100 trials)
+- At SNR=4dB/INR=5dB (waterfall region, 500 trials): best random trellis BLER = 1.33e-1 vs NASA K=7+N2 BLER = 1.48e-2 → **9× worse**; 0/498 candidates came within 5× of NASA K=7+N2
+
+**Root cause**: The N2 decoder is trained on NASA K=7's specific generator polynomial output patterns. It learns to compute branch metrics tuned for those output pairs. A random trellis uses different output pairs — the frozen N2 is effectively a mismatched decoder for it. The structural coupling between the trellis and the N2 model cannot be bypassed with a frozen decoder.
+
+**Conclusion**: True co-design requires joint optimization of trellis + decoder training, not searching with a frozen N2. Phase 3c code was removed; only the backwards-compatible early-stopping addition to `fitness_n2` was retained.
+
 ---
 
 ## What's Next
 
-1. **Phase 4 — Ablations and stress tests**: Compare S1-oracle vs B1/B2 across full SNR/INR sweep; compare S1+N2 vs N2+NASA and B3. Compute budget accounting for all methods.
+1. **Phase 4 — Paper writeup**: IEEE-style paper in `reports/report.tex` already has Phase 3a/3b sections. Needs:
+   - Final figures for all methods (B1, B2, B5, N2, S1-oracle, S1)
+   - Ablation table: B3 negative result (Phase 3c finding) — frozen N2 on random trellises is 9× worse than N2 on NASA K=7
+   - Compute table for all methods (B1, B2, B5, N2, S1-oracle, S1)
+   - Discussion: why both Phase 3a and 3b converge to NASA K=7 (EA finds no better code)
 
-2. **Phase 4 — Paper writeup**: IEEE-style paper in `reports/report.tex` already has Phase 3a/3b sections added. Needs: final figures, ablation results, compute table for all methods (B1, B2, B5, N2, S1-oracle, S1).
+2. **Phase 4 — Ablations**: Compare S1-oracle vs B1/B2 across full SNR/INR sweep; confirm S1 ≈ NASA K=7 under N2 decoding (already observed in Phase 3b).
 
-3. **Optional multi-seed runs**: Phases 3a and 3b currently have only seed 0. Additional seeds would strengthen the CV < 10% success criterion. Not strictly required if results are already conclusive.
+3. **Optional multi-seed runs**: Phases 3a and 3b currently have only seed 0. Additional seeds would strengthen the CV < 10% success criterion. Not strictly required given the convergence result is already conclusive.
 
 ---
 
