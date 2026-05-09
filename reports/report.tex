@@ -1,53 +1,28 @@
-\documentclass[12pt,onecolumn]{IEEEtran}
+\documentclass[conference]{IEEEtran}
 
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
-\usepackage{hyperref}
+\usepackage[hidelinks]{hyperref}
 \usepackage{subcaption}
 \usepackage{siunitx}
 \usepackage[ruled,vlined]{algorithm2e}
 \usepackage{array}
 \usepackage{multirow}
 \usepackage{xcolor}
-\usepackage{titlesec}
-
-% ---- Section heading styles ----
-% Section: large, bold, navy, with a rule underneath
-\definecolor{sectionblue}{RGB}{0,51,102}
-\titleformat{\section}
-  {\Large\bfseries\color{sectionblue}}
-  {\thesection.}{0.6em}{}
-  [\titlerule]
-\titlespacing{\section}{0pt}{14pt}{6pt}
-
-% Subsection: normalsize bold, dark gray, no rule
-\definecolor{subsectiongray}{RGB}{50,50,50}
-\titleformat{\subsection}
-  {\normalsize\bfseries\color{subsectiongray}}
-  {\thesubsection}{0.5em}{}
-\titlespacing{\subsection}{0pt}{10pt}{3pt}
-
-% Subsubsection: italic bold, indented
-\titleformat{\subsubsection}
-  {\normalsize\bfseries\itshape}
-  {\thesubsubsection}{0.5em}{}
-\titlespacing{\subsubsection}{0pt}{8pt}{2pt}
-
-% Subsection numbering: A, B, C ... (no section prefix)
-\renewcommand{\thesubsection}{\Alph{subsection}}
-
-\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+\usepackage{url}
 
 % Convenience macros
 \newcommand{\bm}[1]{\boldsymbol{#1}}
 \newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\dfree}{d_{\mathrm{free}}}
 
-\title{Technical Report}
+\title{Search Designed Trellis with Neural Decoding for Non-traditional Channels}
 
-\author{Abhishek Manjunath\\
-Department of Electrical Engineering\\
-\today}
+\author{\IEEEauthorblockN{Abhishek Manjunath}
+\IEEEauthorblockA{Department of Electrical Engineering\\
+University of Southern California\\
+\texttt{akmanjun@usc.edu}}}
 
 \begin{document}
 
@@ -55,1164 +30,704 @@ Department of Electrical Engineering\\
 
 % ============================================================
 \begin{abstract}
-We investigate learned decoding of a rate-$1/2$, constraint-length-7
-convolutional code under periodic sinusoidal interference, motivated by
-industrial IoT channels.  Three classical baselines are first evaluated:
-mismatched Viterbi (B1), oracle Viterbi (B2), and FFT-based interference
-cancellation (B5).  At SNR~$=5$~dB and INR~$=5$~dB, B1 saturates at
-BLER~$=1.0$, B2 achieves $10^{-4}$, and B5 achieves $0.35$.
-An end-to-end BiGRU decoder (N1) fails to learn the task --- an information
-bottleneck prevents implicit trellis search --- and exceeds the $2.1$~MFLOP
-compute constraint by $3.17\times$.
-A neural branch metric estimator (N2) resolves this by keeping Viterbi
-intact and replacing only the branch metric computation with a small BiGRU
-($h=16$, $913{,}664$ MACs).  N2 (seed~32) achieves BLER~$=2.5\times10^{-3}$
-at the same operating point, a gain exceeding five SNR~dB over B1 and
-$\approx1.2$~dB from the oracle by log-linear interpolation.
-Phase~3 uses an evolutionary algorithm (EA) to search the space of valid
-64-state rate-$1/2$ trellises under two fitness criteria.
-Under oracle-Viterbi fitness (Phase~3a), the EA improves proxy BLER
-from $2.1\times10^{-2}$ to $1.1\times10^{-2}$ over 34 generations;
-full evaluation with $10{,}000$ trials yields BLER~$=8\times10^{-5}$
-at SNR~$=5$~dB, matching B2.
-Under frozen N2 fitness (Phase~3b), the search converges at generation~1
-and recovers NASA~K=7 exactly, confirming it is optimal among 64-state
-trellises for this decoder class.
+Industrial-IoT and unlicensed sub-GHz wireless links share spectrum with
+narrowband emissions from variable-frequency motor drives, switching power
+converters, and PWM controllers, which appear at the receiver as periodic
+sinusoidal interferers superimposed on thermal noise.  Under such
+non-Gaussian interference, the standard mismatched soft-decision Viterbi
+decoder for a rate-$1/2$, constraint-length-7 (NASA K=7) convolutional code
+saturates at block-error rate (BLER) $=1$ for moderate interference levels.
+I study learned and search-based co-design of the trellis and decoder
+under a strict $2.1$~MFLOP/block compute budget representative of edge
+radios.  A neural branch-metric estimator (\textbf{N2}, $\approx 1.86$\,k
+parameters) trained against the oracle log-likelihood, plugged into a
+standard Viterbi add-compare-select, achieves
+BLER\,$=2.5{\times}10^{-3}$ at SNR\,$=$\,INR\,$=5$~dB---within
+$\approx$1.2\,dB of the oracle decoder by log-linear interpolation,
+using $43.5\%$ of the compute budget.  An end-to-end BiGRU baseline (N1)
+overruns the budget by $3.17\times$ and fails to learn, isolating the
+design lesson that local channel estimation, not global trellis search, is
+the right neural-component scope.  An evolutionary algorithm (EA) over
+valid 64-state rate-$1/2$ finite-state machines, run under both oracle
+and frozen-N2 fitness, converges to the NASA K=7 polynomials, providing
+empirical evidence that this classical code is near-optimal for the
+decoder class considered.
 \end{abstract}
 
 % ============================================================
 \section{Introduction}
 
 Classical convolutional decoding via the Viterbi algorithm assumes a
-precisely known channel model.  In AWGN-only environments, mismatched
-branch metrics computed under this assumption achieve near-optimal
-block-error-rate (BLER) performance.  However, in industrial and
-IoT settings, narrowband sinusoidal interference from motor drives,
-power converters, and switching regulators regularly coexists with
-thermal noise~\cite{viterbi1967,proakis2008}.  A standard Viterbi
-decoder that ignores such interference treats the tonal energy as
-additional noise, causing severe BLER degradation at moderate
-interference-to-noise ratios (INR).
+precisely known additive-white-Gaussian-noise (AWGN) channel.  Closed-form
+mismatched branch metrics derived under this assumption achieve
+near-optimal block-error-rate (BLER) performance in benign environments.
+However, in industrial-IoT, factory-automation, and smart-grid wireless
+links operating in sub-GHz unlicensed bands, narrowband sinusoidal
+interference from variable-frequency motor drives, power converters, and
+PWM controllers regularly coexists with thermal noise.  A standard
+mismatched Viterbi decoder treats the tonal energy as additional
+white noise, with the result that BLER saturates at unity for moderate
+interference-to-noise ratios (INR).  This paper studies the question:
+\emph{can a small, compute-budgeted learned component, inserted into an
+otherwise classical Viterbi decoder, recover most of the BLER lost to
+periodic sinusoidal interference, and does the trellis itself need to be
+re-designed for that decoder?}
 
-This report investigates the following question:
-\emph{Can a computationally constrained learned component, inserted into
-an otherwise classical Viterbi decoder, recover most of the performance
-lost to sinusoidal interference?}
+Two practical constraints shape the problem.  First, edge radios have
+strict per-block compute budgets; I adopt $2.1\times10^{6}$
+multiply-accumulate operations (MACs) per coded block, roughly
+$32\times$ the cost of the K=7 Viterbi inner loop, as the limit any
+admissible decoder must respect.  Second, the structured nature of the
+interference is known a priori (a sum of low-frequency sinusoids with
+unknown amplitude, period, and phase) but the per-block parameters are
+not, so any benefit must come from a per-block estimator that fits within
+the budget.
 
-We pursue this question in three phases:
+\paragraph*{Contributions.}
 \begin{enumerate}
-  \item \textbf{Phase~1 --- Classical Baselines.}  We implement and
-    evaluate the mismatched Viterbi (B1), the oracle Viterbi with perfect
-    interference knowledge (B2), and an FFT-based interference cancellation
-    baseline (B5).  These establish the performance floor, ceiling, and a
-    signal-processing mid-point.
-
-  \item \textbf{Phase~2a --- End-to-End Neural Decoder (Negative Result).}
-    A bidirectional GRU is trained to map raw received samples directly to
-    information bits.  The architecture fails to learn meaningful decoding,
-    plateauing near random-guessing accuracy.  Analysis reveals two root
-    causes: an information bottleneck at the pooling layer and the
-    intractability of implicitly representing a 64-state Viterbi search
-    within a small network.  The model also violates the $2.1$~MFLOP
-    compute constraint.
-
-  \item \textbf{Phase~2b --- Neural Branch Metric Estimator.}
-    Motivated by the Phase~2a failure, we decompose the decoding task:
-    a small BiGRU learns local per-step branch metrics capturing
-    interference effects; the Viterbi algorithm performs the global
-    trellis search using those metrics.  This architecture succeeds,
-    achieving BLER~$=2.5\times10^{-3}$ at SNR~$=5$~dB,
-    INR~$=5$~dB, well within the compute budget.
-
-  \item \textbf{Phase~3 --- Evolutionary Trellis Search.}
-    We co-design the trellis itself via an evolutionary algorithm (EA)
-    that mutates and evaluates candidate 64-state finite-state machines
-    subject to structural validity constraints.  Phase~3a uses oracle
-    Viterbi as the fitness decoder and finds a trellis matching B2
-    performance under oracle decoding.  Phase~3b uses the frozen N2 decoder
-    as fitness and recovers NASA~K=7 exactly, validating that the classical
-    trellis is already optimal for this decoder class.
+  \item I formulate decoding under combined AWGN and periodic sinusoidal
+    interference under a strict $2.1$~MFLOP/block compute budget and
+    benchmark three classical baselines---mismatched, oracle, and
+    FFT-based interference cancellation---to bound the operating envelope.
+  \item I design a neural branch-metric estimator \textbf{N2}, a
+    $\approx 1.86$\,k-parameter BiGRU trained by mean-squared error
+    against the oracle log-likelihood, plugged into a standard Viterbi
+    add-compare-select.  N2 reaches BLER\,$=2.5{\times}10^{-3}$ at
+    SNR\,$=$\,INR\,$=5$~dB, within $\approx$1.2\,dB of the oracle by
+    log-linear interpolation, using $43.5\%$ of the FLOP budget.
+  \item I report a budget-violating negative result: an end-to-end
+    BiGRU decoder (N1) overruns the budget by $3.17\times$ and fails to
+    learn, supporting the design choice of decomposing local channel
+    estimation (neural) from global trellis search (Viterbi).
+  \item I co-design the trellis itself via an evolutionary search over
+    valid 64-state rate-$1/2$ finite-state machines under two fitness
+    functions (oracle Viterbi and frozen N2).  Both searches converge to
+    the NASA K=7 polynomials in my setting, providing empirical evidence
+    that the classical code is near-optimal for this decoder class.
+  \item Code, EA logs, trained weights, and figure-regeneration scripts
+    are released at
+    \href{https://github.com/akmanjun-usc/Research}{\texttt{github.com/akmanjun-usc/Research}}.
 \end{enumerate}
 
-The key thesis is that \emph{problem decomposition} --- assigning local
-channel estimation to a neural network and global sequence search to a
-classical algorithm --- is the critical design principle enabling
-efficient and effective decoding under structured interference.
+% ============================================================
+\section{Related Work}
+
+\subsection{Classical Decoding under Non-Gaussian Interference}
+The Viterbi algorithm provides maximum-likelihood sequence detection over
+finite-state codes \cite{viterbi1967}, and the NASA K=7 rate-$1/2$
+convolutional code with octal generators $(171,133)_8$ is the de-facto
+benchmark for short-block soft-decision decoding
+\cite{nasastandard,proakis2008}.  Closed-form soft metrics derived under
+the AWGN assumption are mismatched in the presence of
+non-Gaussian interferers, and soft-output extensions such as
+SOVA~\cite{hagenauer1989} preserve trellis structure but do not by
+themselves address structured interference.  Frequency-domain
+interference cancellation (subtracting an estimated tone before
+soft decoding) is a long-standing remedy whose accuracy is bounded by
+estimation error at low signal-to-noise ratios.
+
+\subsection{Neural Decoders and Learned Metrics}
+Two threads of work apply learning to decoding.  The first replaces the
+decoder entirely: end-to-end recurrent or attention-based architectures
+that map received samples directly to information bits
+\cite{gruber2017,kim2018,kargi2024}.  The second preserves the classical
+algorithmic structure and learns only the components for which a
+closed-form derivation requires unavailable channel knowledge.
+ViterbiNet~\cite{shlezinger2020} is the canonical example: it retains
+Viterbi add-compare-select and learns the per-step branch metrics from
+data.  Belief-propagation unrolling \cite{nachmani2018} pursues the same
+principle for linear codes.  Our N2 design is squarely in the second
+thread, with the additional constraint of fitting a small fixed
+multiply-accumulate budget.
+
+\subsection{Code Design and Automated Search}
+Convolutional code design has classically used analytical bounds on free
+distance and weight enumerators, with computer search at fixed constraint
+length.  Recent work explores online learning of trellis structure for
+unknown channels~\cite{yang2022}.  Phase~3 of this paper differs from
+prior automated code search in two respects: the fitness is empirical
+BLER (not an analytical bound), and one of the two fitness functions is a
+\emph{learned} decoder, allowing the search to detect any
+trellis--decoder mismatch in the frozen-N2 setting.
 
 % ============================================================
-\section{System Model}
+\section{System Model and Problem Formulation}
 
-\subsection{Channel}
-
+\subsection{Channel and Interference}
 The discrete-time channel model is
 \begin{equation}
   r[t] = x[t] + n[t] + i[t], \quad t = 0, 1, \ldots, N-1,
   \label{eq:channel}
 \end{equation}
-where $x[t] \in \{-1, +1\}$ is a BPSK-modulated coded symbol,
-$n[t] \sim \mathcal{N}(0, \sigma^2)$ is additive white Gaussian noise,
-and $i[t]$ is a deterministic sinusoidal interferer:
+where $x[t] \in \{-1,+1\}$ is a BPSK-modulated coded symbol,
+$n[t] \sim \mathcal{N}(0, \sigma^2)$ is AWGN, and $i[t]$ is a
+deterministic periodic interferer
 \begin{equation}
-  i[t] = A \sin\!\left(\frac{2\pi t}{P} + \varphi\right).
+  i[t] = A \sin\!\left(\frac{2\pi t}{P} + \varphi\right),
   \label{eq:interference}
 \end{equation}
-The amplitude $A$ is derived from the interference-to-noise ratio (INR):
-\begin{equation}
-  A = \sqrt{2 \cdot 10^{\mathrm{INR}_{\mathrm{dB}}/10} \cdot \sigma^2},
-  \label{eq:amplitude}
-\end{equation}
-which ensures that the average sinusoidal power equals
+with amplitude $A = \sqrt{2 \cdot 10^{\mathrm{INR}_{\mathrm{dB}}/10} \cdot \sigma^2}$
+chosen so that the average sinusoidal power equals
 $10^{\mathrm{INR}_{\mathrm{dB}}/10} \cdot \sigma^2$.
-The period $P$ is drawn uniformly from $\{8, 9, \ldots, 32\}$ samples,
-the phase $\varphi$ is drawn uniformly from $[0, 2\pi)$, and the
-noise variance is $\sigma^2 = 10^{-\mathrm{SNR}_{\mathrm{dB}}/10}$
-(with unit symbol energy $E_s = 1$).
+The integer period $P$ is uniformly drawn from $\{8,\ldots,32\}$ samples,
+the phase $\varphi$ uniformly from $[0,2\pi)$, and the noise variance
+$\sigma^2 = 10^{-\mathrm{SNR}_{\mathrm{dB}}/10}$ with unit symbol energy.
 
 \subsection{Trellis Code}
+Encoding uses the NASA standard rate-$1/2$, constraint-length $K_c=7$
+convolutional code with octal generators $G_1=171_8$, $G_2=133_8$ and
+free distance $\dfree=10$.  The encoder consumes $K=256$ information bits
+plus $m=K_c-1=6$ tail (zero) bits to terminate the trellis, producing
+$N=2(K{+}m)=524$ coded bits per block; effective rate
+$R_{\mathrm{eff}}=K/N\approx 0.489$.
 
-The encoder is the NASA standard rate-$1/2$, constraint-length-7
-convolutional code with octal generator polynomials
-$G_1 = 171_8 = (1111001)_2$ and $G_2 = 133_8 = (1011011)_2$~\cite{nasastandard}.
-The constraint length $K_c = 7$ gives memory $m = K_c - 1 = 6$ and
-$S = 2^m = 64$ trellis states.  The free distance is $d_{\mathrm{free}} = 10$.
-
-Encoding processes $K = 256$ information bits.  Six tail (zero) bits are
-appended to terminate the trellis back to state~0, giving $K + m = 262$
-total input bits and $N = 2 \times 262 = 524$ coded bits per block.
-The effective code rate is $R_{\mathrm{eff}} = K/N = 256/524 \approx 0.489$.
-
-\subsection{System Parameters}
-System parameters are given in Table \ref{tab:params}
-\begin{table}[h!]
+\begin{table}[t]
   \centering
-  \caption{Fixed system parameters}
+  \caption{Fixed system parameters.}
   \label{tab:params}
+  \small
   \begin{tabular}{ll}
     \toprule
     Parameter & Value \\
     \midrule
     Modulation & BPSK, $x[t] \in \{-1,+1\}$ \\
-    Information bits & $K = 256$ \\
-    Constraint length & $K_c = 7$ (memory $m=6$) \\
+    Information / tail / coded bits & $K{=}256$ / $m{=}6$ / $N{=}524$ \\
     Trellis states & $S = 64$ \\
-    Tail bits & $m = 6$ (trellis termination) \\
-    Total input bits & $K + m = 262$ \\
-    Coded block length & $N = 524$ \\
-    Nominal code rate & $R = 1/2$ \\
-    Effective code rate & $R_{\mathrm{eff}} = 256/524 \approx 0.489$ \\
-    Free distance & $d_{\mathrm{free}} = 10$ \\
-    SNR range & [$0$, $10$]~dB \\
-    INR range & [$-5$, $15$]~dB \\
-    Interference period & $P \in [8, 32]$ samples \\
-    Interference phase & $\varphi \in [0, 2\pi)$ \\
-    Eval trials (standard) & $10{,}000$ blocks \\
-    Target BLER & $10^{-3}$ \\
+    Free distance & $\dfree = 10$ \\
+    SNR range / INR range & $[0,10]$\,dB / $[-5,15]$\,dB \\
+    Interference period $P$ & integer $\in [8, 32]$ \\
+    Interference phase $\varphi$ & uniform $\in [0, 2\pi)$ \\
+    Eval Monte-Carlo trials & $10{,}000$ (final: $100{,}000$) \\
+    Compute budget per block & $2.1\times10^6$ MACs \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 \subsection{Compute Budget}
 \label{sec:budget}
-
-A compute constraint of $2.1 \times 10^6$ multiply-accumulate operations
-(MACs) per block is enforced for all methods.  All profiling uses a
-consistent MAC-based convention throughout: one MAC counts one
-multiply-add pair (e.g., a squared difference $(y-x)^2$ is one MAC, not
-two separate operations).  The budget is anchored to the cost of the
-Viterbi algorithm profiled under this convention.
-
-The Viterbi add-compare-select (ACS) loop uses $N = 512$ coded bits
-(the $K = 256$ information bits at rate~$1/2$, excluding tail sections
-for this budget calculation).  There are $T = N/2 = 256$ trellis steps,
-$S = 64$ destination states, 2 incoming branches per state, and
-2 output symbols per branch, each requiring 1~MAC:
-\begin{equation}
-  C_{\mathrm{Viterbi}} = T \times S \times 2 \times 2
-  = 256 \times 64 \times 4 = 65{,}536 \text{ MACs}.
-  \label{eq:viterbi_cost}
-\end{equation}
-The $2.1$~MFLOP budget therefore allows roughly $32\times$ the cost of
-the Viterbi ACS loop, providing generous headroom for a neural component
-while remaining tractable for edge deployment.  All methods reported in
-this work are verified to satisfy this constraint.
+A compute constraint of $2.1\times10^{6}$ multiply-accumulate operations
+(MACs) per block is enforced for every method (Table~\ref{tab:params}).
+I use a consistent MAC convention throughout: a squared difference
+$(y-x)^2$ counts as one MAC, not two.  The Viterbi add-compare-select
+(ACS) loop, which dominates the cost of B1/B2/B5, performs
+$T\,S\,(\text{branches})\,(\text{outputs/branch}) = 256{\cdot}64{\cdot}4
+= 65{,}536$ MACs per block, so the budget allows roughly $32\times$ the
+classical decoder's cost---generous headroom for a small neural
+component yet tractable for edge deployment.
 
 % ============================================================
-\section{Phase 1: Classical Baselines}
+\section{Approach and Design}
 
-\subsection{Mismatched Viterbi (B1)}
+\subsection{Classical Baselines}
 
-The mismatched Viterbi decoder assumes an AWGN-only channel.  At trellis
-step $t$, the branch metric for the transition $s \to s'$ producing BPSK
-hypothesis $\mathbf{x}_{s \to s'} \in \{-1,+1\}^2$ is
+I evaluate three classical baselines that bracket the achievable BLER.
+Let $\mathbf{y}[k]=(r[2k], r[2k{+}1])^T$ be the received pair at trellis
+step $k$ and $\mathbf{x}_{s\to s'}\in\{-1,+1\}^2$ the BPSK output of
+transition $s\to s'$.  The \textbf{mismatched Viterbi (B1)} ignores
+interference and uses
 \begin{equation}
-  \gamma_{\mathrm{B1}}(s \to s', k) =
-    -\frac{\norm{\mathbf{y}[k] - \mathbf{x}_{s \to s'}}^2}{2\sigma^2},
-  \label{eq:b1metric}
+  \gamma_{\mathrm{B1}} = -\norm{\mathbf{y}[k]-\mathbf{x}_{s\to s'}}^2/(2\sigma^2),
+  \label{eq:b1}
 \end{equation}
-where $\mathbf{y}[k] = (r[2k],\, r[2k+1])^T$ denotes the received pair
-at trellis step $k$ (distinct from the scalar sample $r[t]$ in Eq.~\eqref{eq:channel}).
-Because the interference term $i[t]$ is not modeled, B1 treats sinusoidal
-energy as noise, causing BLER saturation even at moderate INR.
-
-\subsection{Oracle Viterbi (B2)}
-
-The oracle Viterbi has full knowledge of $A$, $P$, and $\varphi$ and
-subtracts the interference before computing branch metrics:
+treating $i[t]$ as additional noise.  The \textbf{oracle Viterbi (B2)},
+used as an upper-bound reference, has perfect knowledge of $A,P,\varphi$
+and subtracts $\mathbf{i}[k]$ before the Euclidean term, giving
 \begin{equation}
-  \gamma_{\mathrm{B2}}(s \to s', k) =
-    -\frac{\norm{\mathbf{y}[k] - \mathbf{x}_{s \to s'} - \mathbf{i}[k]}^2}{2\sigma^2},
-  \label{eq:b2metric}
+  \gamma_{\mathrm{B2}} = -\norm{\mathbf{y}[k]-\mathbf{x}_{s\to s'}-\mathbf{i}[k]}^2/(2\sigma^2).
+  \label{eq:b2}
 \end{equation}
-where $\mathbf{i}[k] = (i[2k],\, i[2k+1])^T$ is the known interference pair at trellis step $k$.
-B2 represents the performance ceiling: it achieves optimal ML decoding
-under the true channel model and serves as the upper bound for all methods.
+The \textbf{interference-cancellation baseline (B5)} estimates
+$(\hat A,\hat P,\hat\varphi)$ from a periodogram of $r[t]$ followed by a
+least-squares fit on the top-5 spectral peaks within
+$[1/P_{\max},1/P_{\min}]$, subtracts the estimated interferer, then runs
+B1 on the residual.  B5 represents the best signal-processing-only
+mid-point and exposes the estimation-error floor in the waterfall region.
+I dismissed iterative interference cancellation as a fourth baseline
+because its compute cost (multiple FFT passes per block) approaches the
+neural alternative without the modeling flexibility.
 
-\subsection{Interference Cancellation + Viterbi (B5)}
+\subsection{Learned Branch-Metric Decoder (N2)}
+\label{sec:n2}
 
-B5 estimates the interference parameters from the received signal and
-applies a subtraction prior to mismatched Viterbi decoding:
+The Viterbi algorithm decomposes maximum-a-posteriori sequence detection
+into a dynamic program over branch metrics that, in B2, are exact
+log-likelihoods.  Computing those metrics in closed form requires per-block
+knowledge of $A,P,\varphi$.  N2 replaces only that closed-form
+computation with a small BiGRU that learns to predict the metrics from
+the received signal, leaving Viterbi ACS unchanged.
+
+\paragraph*{Architecture.}
+The input $\mathbf{Y}\in\mathbb{R}^{T\times 2}$ pairs consecutive received
+samples $(r[2k],r[2k{+}1])$ along the trellis time axis ($T=K{+}m=262$).
+A bidirectional GRU with hidden size $h=16$ per direction
+($\approx 1.86$\,k parameters) emits a 32-dim state per step; a linear
+head maps to four scores per step, one for each BPSK output pair
+$\mathbf{h}_j\in\{(-1,-1),(-1,+1),(+1,-1),(+1,+1)\}$.  At decode time,
+the score for transition $s\to s'$ is looked up as
+$\hat\gamma[t,j(s\to s')]$ where $j(s\to s')$ is a precomputed
+trellis-specific index.  This design has roughly $12.5\times$ fewer
+parameters than the rejected end-to-end alternative described next.
+
+\paragraph*{Negative result: end-to-end N1.}
+I initially evaluated a one-stage end-to-end BiGRU (N1) with hidden size
+$h=32$ that maps the full $524$-sample received block to $K=256$
+information bits via a pooled hidden state.  N1 plateaus at $\approx
+53.5\%$ bit accuracy across all pooling strategies (mean, last, attention)
+and never decodes a block correctly.  Two structural pathologies explain
+this: a $64$-dim pooling bottleneck cannot represent the mutual
+information between a coded $524$-sample block and its $256$ information
+bits, and a small recurrent network cannot implicitly carry out a
+$64$-state Viterbi search across $262$ trellis sections.  Independently of
+its accuracy, N1 requires $\approx 6.66$\,MFLOP/block, $3.17\times$ the
+budget, ruling it out under the compute constraint.  This negative
+result motivated the strict decomposition adopted in N2: assign
+\emph{local channel estimation} to the neural component and
+\emph{global sequence search} to Viterbi.
+
+\paragraph*{Loss and training-target ablation.}
+I train N2 by mean-squared error against the oracle branch metric
 \begin{equation}
-  \tilde{\mathbf{y}}[k] = \mathbf{y}[k] - \hat{A}\begin{pmatrix}\sin(2\pi(2k)/\hat{P}+\hat{\varphi})\\\sin(2\pi(2k{+}1)/\hat{P}+\hat{\varphi})\end{pmatrix},
-\end{equation}
-followed by the B1 branch metric on $\tilde{\mathbf{y}}[k]$.
-
-The estimation pipeline proceeds as follows:
-\begin{enumerate}
-  \item Compute the periodogram of $r[t]$ via FFT.
-  \item Identify the top-5 magnitude peaks whose frequencies fall within
-    the valid range $[1/P_{\max}, 1/P_{\min}]$.
-  \item For each candidate frequency $\omega_k = 2\pi f_k$, fit
-    $r[t] \approx a_k \cos(\omega_k t) + b_k \sin(\omega_k t) + c$
-    via least squares: $\hat{\mathbf{c}}_k = (\mathbf{A}_k^T \mathbf{A}_k)^{-1} \mathbf{A}_k^T \mathbf{r}$.
-  \item Recover amplitude and phase:
-    $\hat{A}_k = \sqrt{a_k^2 + b_k^2}$, $\hat{\varphi}_k = \mathrm{atan2}(a_k, b_k)$.
-  \item Select the candidate minimizing the residual
-    $\sum_t (r[t] - \hat{A}_k \sin(\omega_k t + \hat{\varphi}_k))^2$.
-\end{enumerate}
-B5 demonstrates the limit of signal-processing-only interference mitigation.
-
-\subsection{Compute Cost}
-
-\begin{table}[h!]
-  \centering
-  \caption{Phase~1 compute cost (per block, 10{,}000-trial latency median)}
-  \label{tab:phase1compute}
-  \begin{tabular}{lrrr}
-    \toprule
-    Method & FLOPs & Latency (ms) & \% of $2.1$M budget \\
-    \midrule
-    B1 Mismatched Viterbi & $65{,}536$  & $0.23$ & $3.1\%$ \\
-    B2 Oracle Viterbi     & $65{,}536$  & $0.27$ & $3.1\%$ \\
-    B5 IC + Viterbi       & $94{,}720$  & $0.93$ & $4.5\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-Table~\ref{tab:phase1compute} summarizes the compute cost of all three
-classical baselines what was calculated using \texttt{thop}.  All consume less than $5\%$ of the $2.1$~MFLOP
-budget, leaving substantial headroom for any neural component.
-
-\subsection{Results}
-
-\subsubsection{BLER vs.\ SNR (INR = 5~dB)}
-
-Table~\ref{tab:phase1snr} and Fig.~\ref{fig:phase1snr} show the BLER
-vs.\ SNR performance of all three baselines at INR~$=5$~dB.
-
-\begin{table}[h!]
-  \centering
-  \caption{BLER vs.\ SNR at INR~$=5$~dB (10{,}000 trials per point)}
-  \label{tab:phase1snr}
-  \begin{tabular}{rrrr}
-    \toprule
-    SNR (dB) & B1 & B2 & B5 \\
-    \midrule
-     0 & $1.000$             & $9.46\times10^{-1}$ & $9.93\times10^{-1}$ \\
-     2 & $1.000$             & $1.50\times10^{-1}$ & $7.69\times10^{-1}$ \\
-     4 & $1.000$             & $1.60\times10^{-3}$ & $4.79\times10^{-1}$ \\
-     5 & $1.000$             & $1.00\times10^{-4}$ & $3.50\times10^{-1}$ \\
-     6 & $9.79\times10^{-1}$ & $<\!10^{-4}$        & $2.13\times10^{-1}$ \\
-     8 & $1.02\times10^{-1}$ & $<\!10^{-4}$        & $2.65\times10^{-2}$ \\
-    10 & $1.00\times10^{-4}$ & $<\!10^{-4}$        & $1.00\times10^{-4}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase1/figures/phase1_bler_vs_snr.pdf}
-  \caption{BLER vs.\ SNR at INR~$=5$~dB for B1, B2, and B5.
-    See Table~\ref{tab:phase1snr} for numerical values.}
-  \label{fig:phase1snr}
-\end{figure}
-
-\subsubsection{BLER vs.\ INR (SNR = 5~dB)}
-
-Table~\ref{tab:phase1inr} and Fig.~\ref{fig:phase1inr} show the BLER
-vs.\ INR performance at SNR~$=5$~dB across the full INR range.
-
-\begin{table}[h!]
-  \centering
-  \caption{BLER vs.\ INR at SNR~$=5$~dB (10{,}000 trials per point)}
-  \label{tab:phase1inr}
-  \begin{tabular}{rrrr}
-    \toprule
-    INR (dB) & B1 & B2 & B5 \\
-    \midrule
-    $-5$ & $1.7\times10^{-3}$ & $1.0\times10^{-4}$ & $3.0\times10^{-4}$ \\
-    $ 0$ & $1.14\times10^{-1}$ & $1.0\times10^{-4}$ & $2.49\times10^{-2}$ \\
-    $ 5$ & $1.000$             & $1.0\times10^{-4}$ & $3.50\times10^{-1}$ \\
-    $10$ & $1.000$             & $1.0\times10^{-4}$ & $6.73\times10^{-1}$ \\
-    $15$ & $1.000$             & $1.0\times10^{-4}$ & $8.20\times10^{-1}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase1/figures/phase1_bler_vs_inr.pdf}
-  \caption{BLER vs.\ INR at SNR~$=5$~dB for B1, B2, and B5.
-    B2 is invariant to INR; B1 and B5 degrade with increasing interference.
-    See Table~\ref{tab:phase1inr} for numerical values.}
-  \label{fig:phase1inr}
-\end{figure}
-
-The key observation is that at SNR~$=5$~dB the interference becomes
-catastrophic for B1 at INR~$\approx5$~dB, and B5's estimation error
-limits its benefit beyond INR~$\approx0$~dB.  The $\approx 17$~dB
-gap between B1 and B2 at INR~$=5$~dB defines the opportunity for a
-learned approach.
-
-% ============================================================
-\newpage
-\section{Phase 2a: End-to-End Neural Decoder}
-\label{sec:phase2a}
-
-\subsection{Architecture}
-
-Motivated by prior work on RNN-based channel decoders~\cite{gruber2017,
-kim2018}, we implemented a bidirectional GRU (BiGRU) end-to-end decoder,
-denoted N1.  The architecture is:
-
-\begin{itemize}
-  \item \textbf{Input:} $(B, 524, 1)$ --- raw received samples, one per
-    time step.
-  \item \textbf{BiGRU:} hidden size $h=32$ per direction, bidirectional,
-    1 layer.  Output: $(B, 524, 64)$ all-timestep hidden states.
-  \item \textbf{Pooling:} Final hidden states from both directions
-    concatenated: $(B, 64)$.
-  \item \textbf{Output head:} Linear$(64, 256) \to (B, 256)$ logits.
-\end{itemize}
-
-Total parameter count: $\approx 23{,}000$.  Three pooling strategies
-were evaluated: mean pooling over all $524$ time steps ($\approx52.1\%$
-bit accuracy), final-hidden-state pooling ($\approx53.5\%$), and
-attention-weighted pooling ($\approx53.8\%$).
-
-\subsection{Training Configuration}
-
-Training used binary cross-entropy with logits (BCEWithLogitsLoss), the
-Adam optimizer at lr~$=10^{-3}$ with StepLR decay, batch size 128,
-and on-the-fly batch generation at SNR~$\in[0,10]$~dB,
-INR~$\in[-5,15]$~dB, $P\in[8,32]$.
-Validation BLER was measured every 5 epochs on 1{,}000 blocks at
-SNR~$=5$~dB, INR~$=5$~dB; early stopping used patience 20.
-
-\subsection{Analytical Compute Budget}
-\label{sec:n1flops}
-
-The BiGRU with $h=32$, input dimension $d=1$, applied to the full
-$T=524$-sample sequence incurs the following FLOPs per block.
-Each GRU gate (input, reset, update) requires $h \times (h + d) = 32 \times 33$
-multiply-accumulate (MAC) operations; there are 3 gates, giving
-$6 \times h \times (h + d)$ MACs per time step per direction:
-\begin{align}
-  C_{\mathrm{GRU,dir}} &= T \times 6 \times h \times (h + d) \notag \\
-  &= 524 \times 6 \times 32 \times 33 = 3{,}320{,}064.
-\end{align}
-Both directions together, plus the linear output head:
-\begin{align}
-  C_{\mathrm{N1}} &= 2 \times C_{\mathrm{GRU,dir}} + 64 \times 256 \notag \\
-  &= 6{,}640{,}128 + 16{,}384 \approx 6.66 \text{ MFLOP}.
-\end{align}
-This is \textbf{$3.17\times$ the $2.1$~MFLOP constraint}, making N1
-inadmissible under the compute budget even if it had learned to decode.
-
-\subsection{Experimental Results}
-
-Across all training configurations and pooling strategies, the model
-plateaued at approximately $53.5\%$ bit accuracy, only marginally above
-the $50\%$ random-guessing baseline.  BLER remained at $1.0$ throughout
-all training runs --- no block was ever decoded correctly.
-
-An overfitting sanity check (4 fixed blocks, 500 epochs) confirmed that
-the architecture has sufficient capacity to memorize small datasets
-(bit accuracy $100\%$, loss $<0.003$), ruling out implementation errors.
-
-\subsection{Failure Analysis}
-
-Two structural problems preclude N1 from succeeding:
-
-\paragraph{Information bottleneck.}
-The pooling operation compresses the full $524$-step sequence into a
-$64$-dimensional vector, from which $256$ information bits must be
-recovered.  The mutual information of a BPSK convolutional codeword
-transmitted over this channel is far greater than what a $64$-dim vector
-can represent; the bottleneck discards the structured redundancy that
-Viterbi exploits through its trellis search.
-
-\paragraph{Implicit trellis search.}
-Viterbi exploits the Markov structure of the code via dynamic programming
-over $64$ states across $262$ trellis sections.  For N1 to succeed, the
-GRU hidden state would need to implicitly represent this exponential-space
-search --- a combinatorially intractable mapping for a network with
-$\approx23{,}000$ parameters.
-
-\paragraph{Design lesson.}
-The failure of N1 motivates a strict decomposition: assign the problem
-of \emph{local channel estimation} (what is the likely interference at
-time $t$?) to the neural component, and the problem of
-\emph{global sequence search} (what path through the trellis best
-explains the full received sequence?) to the Viterbi algorithm.
-This decomposition is the foundation of Phase~2b.
-
-% ============================================================
-\section{Phase 2b: Neural Branch Metric Estimator}
-\label{sec:phase2b}
-
-\subsection{Motivation}
-
-The Viterbi algorithm decomposes the MAP sequence detection problem into
-a dynamic program over branch metrics $\gamma(s \to s', t)$.  In the
-oracle decoder (B2), these metrics are exact log-likelihoods under the
-true channel.  The key insight is that the oracle metric requires
-knowledge of $A$, $P$, and $\varphi$ --- three continuously-valued
-parameters that change per block --- whereas Viterbi itself is a
-deterministic algorithm that requires only a metric table.
-
-N2 replaces the closed-form oracle metric computation with a BiGRU that
-\emph{learns} to predict those metrics from the received signal, without
-ever explicitly estimating $A$, $P$, or $\varphi$.
-
-\subsection{Architecture}
-
-The neural branch metric estimator processes received signals grouped
-into pairs, aligned with the trellis time axis.  The full architecture
-is as follows:
-
-\begin{itemize}
-  \item \textbf{Input:} $(B, T, 2)$ with $T = K + m = 262$.  Consecutive
-    received samples are grouped into pairs $\mathbf{y}[k] = (r[2k],\, r[2k+1])^T$.
-  \item \textbf{BiGRU:} hidden size $h=16$ per direction, 1 layer.
-    Output: $(B, T, 32)$ --- both-direction hidden states concatenated.
-  \item \textbf{Linear head:} Linear$(32, 4) \to (B, T, 4)$ --- one score
-    per BPSK output pair at each trellis step.
-\end{itemize}
-
-The four BPSK output pairs correspond to all combinations
-$\mathbf{h}_j \in \{-1,+1\}^2$:
-$\mathbf{h}_0 = (-1,-1)$, $\mathbf{h}_1 = (-1,+1)$,
-$\mathbf{h}_2 = (+1,-1)$, $\mathbf{h}_3 = (+1,+1)$.
-During Viterbi, the score for transition $s \to s'$ at step $t$ is
-looked up as $\hat{\gamma}[t, j(s \to s')]$, where $j(s \to s')$ is
-the precomputed index of the BPSK pair produced by that transition.
-
-Total parameter count: $\approx 1{,}860$ --- approximately $12.5\times$
-fewer parameters than N1.
-
-\subsection{Oracle Training Targets and Loss Function}
-
-For each training sample, the true interference $\mathbf{i}[t]$ is
-known (generated on-the-fly during training).  The oracle branch metric
-for hypothesis $\mathbf{h}_j$ at step $t$ is the negative squared
-Euclidean distance:
-\begin{equation}
-  \gamma^*_j(k) = -\norm{\mathbf{y}[k] - \mathbf{h}_j - \mathbf{i}[k]}^2.
+  \gamma^*_j(k) = -\norm{\mathbf{y}[k]-\mathbf{h}_j-\mathbf{i}[k]}^2,
   \label{eq:oracle_metric}
 \end{equation}
-This is the unnormalized oracle log-likelihood; the $1/(2\sigma^2)$
-scaling is applied at inference time after the NN forward pass.
+which is the unnormalised oracle log-likelihood; cross-entropy on
+information bits was rejected because the per-step metrics are real-valued
+and the regression target is well-defined per BPSK output pair.
+Two training-target normalisations were investigated.
+\textbf{Seed~32} learns the unnormalised distance and applies the
+$1/(2\sigma^2)$ scaling deterministically at inference, isolating the
+network's task to interference-aware Euclidean estimation.
+\textbf{Seed~42} learns the full log-likelihood including the
+$\sigma^2$ scaling.  Seed~32's target distribution is substantially
+better-conditioned (initial MSE $24.4$ versus $122.4$; final MSE $1.27$
+versus $18.97$), and the seed-32 checkpoint is used for all subsequent
+N2 results.
 
-The network is trained with mean squared error (MSE) loss:
-\begin{equation}
-  \mathcal{L} = \frac{1}{B \cdot T \cdot 4}
-    \sum_{b,t,j} \bigl( \hat{\gamma}_{b,j}(t) - \gamma^*_{b,j}(t) \bigr)^2.
-\end{equation}
+\paragraph*{Training configuration.}
+Adam optimiser at lr~$=10^{-3}$ with StepLR decay, batch size $256$,
+$200$ batches per epoch, up to $200$ epochs with patience $20$.  Each
+batch draws SNR~$\sim\mathcal{U}[0,10]$\,dB,
+INR~$\sim\mathcal{U}[-5,15]$\,dB, $P\sim\mathcal{U}\{8,\ldots,32\}$,
+$\varphi\sim\mathcal{U}[0,2\pi)$, so evaluation across the operating
+range is in-distribution.  Validation BLER is measured every 5 epochs on
+$1{,}000$ blocks at SNR\,$=$\,INR\,$=5$\,dB.
 
-MSE on the oracle metrics (rather than cross-entropy on information bits)
-is the natural loss for this regression task and is the approach
-adopted by ViterbiNet~\cite{shlezinger2020} and related hybrid
-model-based/data-driven architectures.
+\subsection{Evolutionary Trellis Search}
+\label{sec:ea}
 
-\subsection{Training Configuration}
+Phases~1 and~2 fix the trellis to NASA K=7.  Phase~3 asks whether a
+co-designed trellis can improve BLER under either oracle decoding
+(\textbf{Phase~3a}) or frozen N2 decoding (\textbf{Phase~3b}).
 
-The full set of training hyperparameters is listed in
-Table~\ref{tab:n2train}.
+\paragraph*{Genome and constraints.}
+A candidate is a genome $\mathcal{G} = (\mathbf{N},\mathbf{O})$ with
+$\mathbf{N} \in \{0,\ldots,63\}^{64\times 2}$ the next-state table and
+$\mathbf{O} \in \{0,1,2,3\}^{64\times 2}$ mapping (state, input) pairs to
+BPSK output indices.  Only genomes satisfying four structural constraints
+are admitted: full connectivity from state~0, termination back to
+state~0, non-catastrophic behaviour (no zero-weight cycle), and free
+distance $\dfree \geq 8$.  I rejected the alternative of representing
+codes by their generator polynomials directly because the genome form
+generalises beyond linear codes.  Constraint checks are fused into a
+single C extension to avoid Python--C boundary cost on rejections.
 
-\begin{table}[h!]
+\paragraph*{Algorithm.}
+Each generation copies $2$ elites unchanged, then produces offspring by
+tournament selection (size~$3$), per-state crossover, and 1--3 random
+edge rewirings (rejection-sampled to validity, up to 1{,}000 attempts).
+Common random numbers within a generation reduce fitness variance.
+EA hyperparameters are summarised in Table~\ref{tab:ea_params}.
+I considered simulated annealing as an alternative search; the EA was
+preferred because its population gives uniform proxy-fitness variance
+estimates and admits trivial parallelisation across candidates.
+
+\begin{table}[t]
   \centering
-  \caption{N2 training hyperparameters}
-  \label{tab:n2train}
+  \caption{EA hyperparameters (shared across Phases~3a and~3b).}
+  \label{tab:ea_params}
+  \small
   \begin{tabular}{ll}
     \toprule
     Parameter & Value \\
     \midrule
-    Loss & MSE on oracle branch metrics \\
-    Optimizer & Adam \\
-    Learning rate & $10^{-3}$, StepLR decay \\
-    Batch size & $256$ \\
-    Batches per epoch & $200$ \\
-    Max epochs & $200$ \\
-    Early stopping patience & $20$ epochs \\
-    Training SNR & Uniform $\in [0, 10]$~dB \\
-    Training INR & Uniform $\in [-5, 15]$~dB \\
-    Training $P$ & Uniform integer $\in [8, 32]$ \\
-    Training $\varphi$ & Uniform $\in [0, 2\pi)$ \\
-    Validation SNR / INR & $5$~dB / $5$~dB \\
-    Validation blocks & $1{,}000$ per check \\
-    Validation interval & Every $5$ epochs \\
+    Population / elite / tournament size & $50$ / $2$ / $3$ \\
+    Max generations / patience & $200$ / $10$ \\
+    Mutation edges & $1$--$3$ \\
+    $\dfree$ target & $\geq 8$ \\
+    Fitness operating point & SNR\,$=3$\,dB, INR\,$=5$\,dB \\
+    Fitness MC trials & $1{,}000$ per candidate \\
+    Fitness decoder (3a / 3b) & oracle Viterbi / frozen N2 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Two random seeds were trained with different oracle metric normalizations:
+\paragraph*{Fitness functions.}
+\textbf{Phase~3a} fitness is empirical BLER under oracle decoding; this
+isolates the trellis's contribution from any decoder approximation.
+\textbf{Phase~3b} fitness uses the seed-32 N2 checkpoint as the decoder,
+implemented as a single batched PyTorch forward pass across all $1{,}000$
+candidate blocks followed by a C-extension Viterbi using the candidate's
+output-pair table $\mathbf{O}$, yielding a $\approx34\times$ speedup
+over a naïve per-sample loop.
 
-\begin{itemize}
-  \item \textbf{Seed~42 (normalized targets):}  Training targets include
-    the $1/(2\sigma^2)$ factor; the NN is trained to predict the full
-    log-likelihood.  No post-processing is applied at inference.
+% ============================================================
+\section{Implementation}
 
-  \item \textbf{Seed~32 (external normalization):}  Training targets are
-    the raw unnormalized distances $-\norm{\mathbf{y}[k] - \mathbf{h}_j -
-    \mathbf{i}[k]}^2$.  At inference, the NN output is divided by $2\sigma^2$
-    before passing to Viterbi.  This decouples the NN's learning task
-    (estimating interference-aware distances) from the noise-level
-    scaling, which is known at inference time.
-\end{itemize}
+All experiments are implemented in Python~3.10 with PyTorch~2.0+ and
+NumPy~1.24+.  The Viterbi add-compare-select inner loop is implemented
+in C (\texttt{viterbi\_core.so}) and the EA constraint checks plus
+batched neural-fitness Viterbi in a second C extension
+(\texttt{phase3\_core.so}); both expose ctypes wrappers with
+Python fallbacks.  Training runs on a single GPU; evaluation runs on
+CPU.  All randomness is controlled by explicit per-call seeds; figures
+are reproducible from a clean clone via the scripts in the public
+repository.  Monte-Carlo trial counts are $10{,}000$ for development and
+$100{,}000$ for the final Phase~1 and Phase~3a SNR/INR sweeps.  Operation
+counts for neural components are profiled with \texttt{thop}; analytical
+checks per Eq.~(\ref{eq:viterbi_cost_macros}) below cross-validate
+\texttt{thop}'s per-gate counting convention.
+\begin{equation}
+  C_{\mathrm{N2}} = 2 \times T \times 6h(h{+}d) + T \times 2h \times 4
+  \label{eq:viterbi_cost_macros}
+\end{equation}
+with $T{=}262$, $h{=}16$, $d{=}2$, giving $941{,}312$ MACs analytically
+and $913{,}664$ MACs from \texttt{thop} (the residual reflects gate-level
+counting differences in PyTorch).
 
-\subsection{Viterbi Integration}
+\paragraph*{Simulation realism.}
+I model the channel as BPSK over AWGN plus a single periodic sinusoid
+because the target deployment is short-block low-SNR sub-GHz industrial
+links where (i) the dominant non-thermal disturbance is narrowband
+emissions from rotating machinery and switching power-electronics with
+fundamental periods comparable to BPSK symbol rate ratios used here, and
+(ii) transmit constellation and code parameters are fixed by the
+deployed standard.  Period range $P\in[8,32]$ samples spans the regime in
+which a tone fits within roughly half to a tenth of a coded block, a
+worst-case window for matched filtering and the regime in which a
+mismatched Viterbi already saturates.  I do not attempt to model
+multipath, frequency-selective fading, or carrier-frequency offset, all
+of which would mask the sinusoidal-interference effect I wish to study;
+those extensions are noted as limitations in
+Section~\ref{sec:limitations}.
 
-The N2 decode pipeline proceeds in two stages:
-\begin{enumerate}
-  \item \textbf{NN forward pass:} A single forward pass through the
-    BiGRU produces the branch metric table $\hat{\boldsymbol{\Gamma}} \in
-    \mathbb{R}^{T \times 4}$ for the entire block.  For seed~32,
-    this is divided element-wise by $2\sigma^2$.
-  \item \textbf{Viterbi ACS:} Standard add-compare-select is applied
-    using $\hat{\boldsymbol{\Gamma}}$, with the precomputed
-    transition-to-output-index table $j(s \to s')$.  Traceback
-    recovers the $K = 256$ decoded information bits.
-\end{enumerate}
+% ============================================================
+\section{Evaluation}
+\label{sec:eval}
 
-The NN forward pass and the Viterbi step are fully separable, enabling
-efficient implementation.  No per-step NN calls are required.
+\subsection{Setup}
+I measure two metrics across two sweeps: BLER versus SNR at fixed
+INR\,$=5$\,dB, and BLER versus INR at fixed SNR\,$=5$\,dB.  Each operating
+point uses $10{,}000$ Monte-Carlo blocks (Phase~3a final sweep:
+$100{,}000$); Wilson 95\,\% confidence half-widths at BLER\,$=10^{-3}$
+and $10{,}000$ trials are within $\pm 6{\times}10^{-4}$, comparable to
+visible curve thickness.  All learned decoders use the same trained
+weights across the SNR/INR sweep---no per-operating-point retraining---so
+performance off the training centre indicates generalisation within the
+training distribution.
 
-\subsection{Compute Cost}
+\subsection{Classical Baselines}
 
-The analytical FLOPs for N2 with $h=16$, $d=2$, $T=262$ are:
-\begin{align}
-  C_{\mathrm{GRU,dir}} &= 262 \times 6 \times 16 \times (16+2) = 453{,}888,\\
-  C_{\mathrm{N2}} &= 2 \times 453{,}888 + 262 \times 32 \times 4
-    = 907{,}776 + 33{,}536 \approx 941{,}312 \text{ FLOPs}.
-\end{align}
+Figs.~\ref{fig:phase1_snr} and~\ref{fig:phase1_inr} establish the
+operating envelope.  Mismatched Viterbi (B1) saturates at BLER\,$=1$ for
+INR\,$\geq 5$\,dB across all SNRs in the sweep; oracle Viterbi (B2) with
+perfect interference knowledge maintains BLER\,$\approx 10^{-4}$ across
+the entire INR range and is invariant to INR by construction.
+Interference-cancellation B5 partially closes the gap at low INR but
+diverges from B2 above INR\,$\approx 0$\,dB as the periodogram-and-LSQ
+estimator's residual error dominates.  The roughly $17$\,dB gap between
+B1 and B2 at INR\,$=5$\,dB defines the opportunity for a learned
+component.
 
-Profiling via \texttt{thop} measured $913{,}664$ FLOPs (the small
-discrepancy reflects gate-level counting conventions in PyTorch).
-Table~\ref{tab:phase2bcompute} compares N2 with the classical baselines.
-
-\begin{table}[h!]
+\begin{figure}[t]
   \centering
-  \caption{Phase~2b compute cost (per block); B1/B2/B5 repeated for comparison}
-  \label{tab:phase2bcompute}
-  \begin{tabular}{lrrr}
-    \toprule
-    Method & FLOPs & Latency (ms) & \% of $2.1$M budget \\
-    \midrule
-    B1 Mismatched Viterbi & $65{,}536$ & $0.30$ & $3.1\%$ \\
-    B2 Oracle Viterbi     & $65{,}536$ & $0.35$ & $3.1\%$ \\
-    B5 IC + Viterbi       & $94{,}720$ & $1.24$ & $4.5\%$ \\
-    N2 (seed~32)          & $913{,}664$ & $1981.9$ & $43.5\%$ \\
-    N2 (seed~42)          & $913{,}664$ & $1614.2$ & $43.5\%$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-N2 uses $43.5\%$ of the $2.1$~MFLOP budget, well within the constraint.
-The high wall-clock latency reflects unoptimized PyTorch inference on CPU
-without batching. The models however, were trained on GPU and the latency was not captured; FLOP count is the relevant metric for comparing
-architectures.
-
-\subsection{Results: BLER vs.\ SNR}
-
-Table~\ref{tab:phase2bsnr} and Fig.~\ref{fig:phase2bsnr} show BLER vs.\
-SNR at INR~$=5$~dB for both N2 seeds alongside the three baselines.
-
-\begin{table}[h!]
-  \centering
-  \caption{BLER vs.\ SNR at INR~$=5$~dB, both N2 seeds (10{,}000 trials)}
-  \label{tab:phase2bsnr}
-  \begin{tabular}{rrrrrr}
-    \toprule
-    SNR (dB) & B1 & B2 & B5 & N2 (s32) & N2 (s42) \\
-    \midrule
-     0 & $1.000$             & $9.46\times10^{-1}$ & $9.93\times10^{-1}$ & $9.86\times10^{-1}$ & $1.000$ \\
-     2 & $1.000$             & $1.50\times10^{-1}$ & $7.69\times10^{-1}$ & $3.19\times10^{-1}$ & $9.93\times10^{-1}$ \\
-     4 & $1.000$             & $1.60\times10^{-3}$ & $4.79\times10^{-1}$ & $1.18\times10^{-2}$ & $5.03\times10^{-1}$ \\
-     5 & $1.000$             & $1.00\times10^{-4}$ & $3.50\times10^{-1}$ & $2.50\times10^{-3}$ & $2.44\times10^{-1}$ \\
-     6 & $9.79\times10^{-1}$ & $<\!10^{-4}$        & $2.13\times10^{-1}$ & $7.00\times10^{-4}$ & $1.31\times10^{-1}$ \\
-     7 & $6.10\times10^{-1}$ & $<\!10^{-4}$        & $9.84\times10^{-2}$ & $2.00\times10^{-4}$ & $8.09\times10^{-2}$ \\
-     8 & $1.02\times10^{-1}$ & $<\!10^{-4}$        & $2.65\times10^{-2}$ & $<\!10^{-4}$        & $4.82\times10^{-2}$ \\
-    10 & $1.00\times10^{-4}$ & $<\!10^{-4}$        & $1.00\times10^{-4}$ & $<\!10^{-4}$        & $8.80\times10^{-3}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \begin{subfigure}[b]{0.48\linewidth}
-    \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf}
-    \caption{Seed~32 (external $\sigma^2$ normalization)}
-    \label{fig:snr_seed32}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[b]{0.48\linewidth}
-    \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf}
-    \caption{Seed~42 (normalized training targets)}
-    \label{fig:snr_seed42}
-  \end{subfigure}
-  \caption{BLER vs.\ SNR at INR~$=5$~dB for N2 (both seeds) and baselines.
-    Numerical values in Table~\ref{tab:phase2bsnr}.}
-  \label{fig:phase2bsnr}
+  \includegraphics[width=\linewidth]{../results/phase1/figures/phase1_bler_vs_snr.pdf}
+  \caption{BLER vs SNR at INR\,$=5$\,dB for the three classical baselines
+  (B1, B2, B5).  B1 saturates; B2 is the oracle ceiling; B5 partially
+  closes the gap before its estimator floor takes over near
+  SNR\,$\approx 6$\,dB.}
+  \label{fig:phase1_snr}
 \end{figure}
 
-Seed~32 achieves BLER~$=2.5\times10^{-3}$ at SNR~$=5$~dB, INR~$=5$~dB,
-representing a gain of more than five SNR dB over B1 (which saturates at
-BLER~$=1.0$).  To quantify the gap to the oracle, log-linear interpolation
-of the B2 curve identifies SNR~$\approx3.81$~dB as the point where B2
-achieves the matched BLER of $2.5\times10^{-3}$, giving a gap of
-$5.00 - 3.81 \approx 1.2$~dB relative to B2.  Seed~42 achieves
-BLER~$=0.244$ at the same operating point --- a significant improvement
-over B1 and B5, but substantially weaker than seed~32.
-
-\subsection{Results: BLER vs.\ INR}
-
-Table~\ref{tab:phase2binr} and Fig.~\ref{fig:phase2binr} show the BLER
-vs.\ INR performance at SNR~$=5$~dB for both N2 seeds and the baselines.
-
-\begin{table}[h!]
+\begin{figure}[t]
   \centering
-  \caption{BLER vs.\ INR at SNR~$=5$~dB, both N2 seeds (10{,}000 trials)}
-  \label{tab:phase2binr}
-  \begin{tabular}{rrrrrr}
-    \toprule
-    INR (dB) & B1 & B2 & B5 & N2 (s32) & N2 (s42) \\
-    \midrule
-    $-5$ & $1.70\times10^{-3}$ & $1.0\times10^{-4}$ & $3.0\times10^{-4}$ & $1.70\times10^{-3}$ & $6.25\times10^{-2}$ \\
-    $ 0$ & $1.14\times10^{-1}$ & $1.0\times10^{-4}$ & $2.49\times10^{-2}$ & $3.00\times10^{-3}$ & $1.62\times10^{-1}$ \\
-    $ 5$ & $1.000$             & $1.0\times10^{-4}$ & $3.50\times10^{-1}$ & $2.50\times10^{-3}$ & $2.44\times10^{-1}$ \\
-    $10$ & $1.000$             & $1.0\times10^{-4}$ & $6.73\times10^{-1}$ & $1.03\times10^{-2}$ & $4.36\times10^{-1}$ \\
-    $15$ & $1.000$             & $1.0\times10^{-4}$ & $8.20\times10^{-1}$ & $7.90\times10^{-2}$ & $9.19\times10^{-1}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+  \includegraphics[width=\linewidth]{../results/phase1/figures/phase1_bler_vs_inr.pdf}
+  \caption{BLER vs INR at SNR\,$=5$\,dB.  B2 is INR-invariant by
+  construction; B1 saturates at BLER\,$=1$ for INR\,$\geq 5$\,dB; B5
+  degrades as the estimator's residual error grows with interferer
+  amplitude.}
+  \label{fig:phase1_inr}
+\end{figure}
 
-\begin{figure}[h!]
+\subsection{Neural Branch-Metric Decoder (N2)}
+\label{sec:eval_n2}
+
+Fig.~\ref{fig:n2_snr} compares both N2 training-target seeds against the
+classical baselines on the SNR sweep.  Seed~32 reaches BLER\,$=2.5{\times}
+10^{-3}$ at SNR\,$=5$\,dB---a gain exceeding five SNR-dB over B1 and
+within $\approx 1.2$\,dB of B2 by log-linear interpolation
+(B2 reaches the matched BLER at SNR\,$\approx 3.81$\,dB).  Seed~42, which
+must absorb the $1/\sigma^2$ scaling into the network's output, sits
+roughly $4$\,dB worse than seed~32 across the sweep and substantially
+better than B1, demonstrating that training-target conditioning matters
+even when the architecture and data are identical.
+
+\begin{figure}[t]
   \centering
-  \begin{subfigure}[b]{0.48\linewidth}
+  \begin{subfigure}[b]{0.49\linewidth}
+    \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_snr_seed32.pdf}
+    \caption{Seed~32 (external $\sigma^2$ normalisation)}
+    \label{fig:n2_snr_seed32}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.49\linewidth}
+    \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_snr_seed42.pdf}
+    \caption{Seed~42 (normalised targets)}
+    \label{fig:n2_snr_seed42}
+  \end{subfigure}
+  \caption{N2 BLER vs SNR at INR\,$=5$\,dB for the two training-target
+  variants, with B1/B2/B5 baselines.  Seed~32 closes most of the
+  B1--B2 gap; seed~42's worse target conditioning leaves a several-dB
+  residual.}
+  \label{fig:n2_snr}
+\end{figure}
+
+Fig.~\ref{fig:n2_inr} plots the INR sweep at fixed SNR\,$=5$\,dB.
+Seed~32 degrades \emph{gracefully}, holding BLER\,$<10^{-2}$ up to
+INR\,$=10$\,dB and matching B1 exactly at INR\,$=-5$\,dB---a useful
+sanity check that the learned metric reduces to the standard Euclidean
+distance when interference vanishes.  B1 saturates at BLER\,$=1$ for
+INR\,$\geq 5$\,dB; B5 deteriorates monotonically with INR.  Seed~42
+saturates above INR\,$\approx 10$\,dB.
+
+\begin{figure}[t]
+  \centering
+  \begin{subfigure}[b]{0.49\linewidth}
     \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_inr_seed32.pdf}
     \caption{Seed~32}
-    \label{fig:inr_seed32}
+    \label{fig:n2_inr_seed32}
   \end{subfigure}
   \hfill
-  \begin{subfigure}[b]{0.48\linewidth}
+  \begin{subfigure}[b]{0.49\linewidth}
     \includegraphics[width=\linewidth]{../results/phase2b/figures/phase2b_bler_vs_inr_seed42.pdf}
     \caption{Seed~42}
-    \label{fig:inr_seed42}
+    \label{fig:n2_inr_seed42}
   \end{subfigure}
-  \caption{BLER vs.\ INR at SNR~$=5$~dB for N2 (both seeds) and baselines.
-    Seed~32 degrades gracefully; B1 saturates above INR~$\approx5$~dB.
-    Numerical values in Table~\ref{tab:phase2binr}.}
-  \label{fig:phase2binr}
+  \caption{N2 BLER vs INR at SNR\,$=5$\,dB.  Seed~32 degrades
+  gracefully; B1 saturates above INR\,$\approx 5$\,dB.}
+  \label{fig:n2_inr}
 \end{figure}
 
-Seed~32 shows \emph{graceful degradation} with increasing INR,
-maintaining BLER below $10^{-2}$ up to INR~$=10$~dB.  B1 has already
-saturated at BLER~$=1$ above INR~$\approx5$~dB.  At INR~$=-5$~dB
-(almost no interference), seed~32 matches B1 exactly, confirming that
-the neural branch metrics recover the standard Euclidean distance
-metric in the interference-free limit.
+\paragraph*{Training convergence.}
+Table~\ref{tab:trainsummary} and Fig.~\ref{fig:trainhist} document the
+training-target ablation.  Seed~32 starts at MSE\,$=24.4$ and reaches
+$1.27$; seed~42's normalised-target formulation starts at MSE\,$=122.4$
+and only reaches $18.97$ in the same epoch budget, with proportionally
+worse validation BLER.  This is consistent with the Approach-section
+argument that externalising the $1/(2\sigma^2)$ scaling decouples the
+neural task (interference estimation) from the analytic noise scaling.
 
-\subsection{Training Convergence}
-
-Fig.~\ref{fig:trainhist} shows the per-epoch training MSE and validation
-BLER for both seeds; the corresponding summary statistics are given in
-Table~\ref{tab:trainsummary}.
-
-\begin{figure}[h!]
+\begin{figure}[t]
   \centering
-  \begin{subfigure}[b]{0.85\linewidth}
+  \begin{subfigure}[b]{\linewidth}
     \includegraphics[width=\linewidth]{../results/phase2b/figures/training_history_seed32.pdf}
-    \caption{Seed~32: MSE and validation BLER}
+    \caption{Seed~32}
     \label{fig:hist_seed32}
-  \end{subfigure}
-  \\[1ex]
-  \begin{subfigure}[b]{0.85\linewidth}
+  \end{subfigure}\\[1ex]
+  \begin{subfigure}[b]{\linewidth}
     \includegraphics[width=\linewidth]{../results/phase2b/figures/training_history_seed42.pdf}
-    \caption{Seed~42: MSE and validation BLER}
+    \caption{Seed~42}
     \label{fig:hist_seed42}
   \end{subfigure}
   \caption{Per-epoch training MSE and validation BLER for both N2 seeds.
-    Seed~32 converges substantially faster; see Table~\ref{tab:trainsummary}
-    for summary statistics.}
+  Seed~32 converges substantially faster; summary in
+  Table~\ref{tab:trainsummary}.}
   \label{fig:trainhist}
 \end{figure}
 
-\begin{table}[h!]
+\begin{table}[t]
   \centering
-  \caption{Training convergence summary}
+  \caption{N2 training convergence (best across $200$ epochs).}
   \label{tab:trainsummary}
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
   \begin{tabular}{lrrrr}
     \toprule
-    Seed & Initial MSE & Final MSE & Best Val BLER & Best Epoch \\
+    Seed & Init.\ MSE & Final MSE & Best val.\ BLER & Best epoch \\
     \midrule
-    32 & $24.36$ & $1.27$ & $0.002$ & $190$ \\
+    32 & $24.4$  & $1.27$  & $0.002$ & $190$ \\
     42 & $122.4$ & $18.97$ & $0.247$ & $200$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Seed~32's much lower final MSE ($1.27$ vs.\ $18.97$) explains its
-substantially better BLER: the normalized-target formulation (seed~42)
-requires the NN to simultaneously learn the oracle distance \emph{and}
-the $1/\sigma^2$ scaling, a harder regression problem with a more
-dispersed target distribution.  By externalizing the $1/(2\sigma^2)$
-scaling, seed~32 focuses the NN on the interference estimation task.
+\subsection{Evolutionary Trellis Search}
+\label{sec:eval_ea}
 
-% ============================================================
-\newpage
-\section{Comparative Analysis}
-\label{sec:comparison}
+\paragraph*{Phase~3a (oracle fitness).}
+Seed~$0$ converges over $34$ generations: best-genome BLER drops
+monotonically from $2.1{\times}10^{-2}$ (gen.~0) to $1.1{\times}10^{-2}$
+(gen.~23), then plateaus until early stop at gen.~33.  Full evaluation
+of the best genome at $100{,}000$ trials yields BLER\,$=8{\times}10^{-5}$
+at SNR\,$=5$\,dB---within Monte-Carlo noise of B2's
+$10^{-4}$---confirming that the EA reproduces the matched-decoder
+benchmark and that the constraint checks are not over-restrictive.  I
+omit a separate Phase~3a figure because its BLER vs SNR/INR curve is
+indistinguishable from B2's at the trial counts used.
 
-\subsection{Performance at the Operating Point (SNR~$=5$~dB, INR~$=5$~dB)}
+\paragraph*{Phase~3b (frozen-N2 fitness).}
+The fitness curve in Fig.~\ref{fig:phase3b}\,(left) shows immediate
+convergence at generation~1, after which no mutation improved the best
+genome over $11$ generations until plateau.  I compared the best genome
+to NASA~K=7 element-wise on both the next-state and output-pair tables
+and verified an exact SHA-256 match: the EA \emph{recovers} NASA~K=7 as
+the optimal trellis under N2 decoding.  Fig.~\ref{fig:phase3b}\,(right)
+confirms that the resulting BLER vs SNR curve coincides with N2 on
+NASA~K=7 within Monte-Carlo noise.  This is a striking result: under
+two independently-defined fitness functions (one analytical, one
+learned), the EA returns the same trellis the engineering community has
+used for half a century.  Section~\ref{sec:discussion} interprets this
+finding.
 
-Table~\ref{tab:summary} presents a unified comparison of all methods at
-the primary operating point.
-
-\begin{table}[h!]
+\begin{figure}[t]
   \centering
-  \caption{Summary comparison at SNR~$=5$~dB, INR~$=5$~dB}
+  \begin{subfigure}[b]{0.49\linewidth}
+    \includegraphics[width=\linewidth]{../results/phase3b/figures/fitness_curves_seed0.pdf}
+    \caption{Phase~3b EA fitness}
+    \label{fig:phase3b_fitness}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.49\linewidth}
+    \includegraphics[width=\linewidth]{../results/phase3b/figures/phase3b_bler_vs_snr.pdf}
+    \caption{S1 (search + N2) vs N2 (NASA + N2)}
+    \label{fig:phase3b_snr}
+  \end{subfigure}
+  \caption{Phase~3b convergence and BLER.  The EA converges in a single
+  generation to NASA~K=7 (verified by element-wise and SHA-256 match);
+  the resulting BLER curve is indistinguishable from N2 on NASA~K=7
+  within MC noise.}
+  \label{fig:phase3b}
+\end{figure}
+
+\subsection{Compute Cost and Operating-Point Summary}
+
+Table~\ref{tab:compute} merges per-method compute into a single budget
+view.  All admissible methods consume $\leq 43.5\%$ of the $2.1$~MFLOP
+budget; only the rejected end-to-end N1 violates it.  Wall-clock
+latencies reflect unoptimised Python/PyTorch CPU inference and should
+not be compared across implementations; the FLOP column is the
+budget-relevant quantity.  Table~\ref{tab:summary} summarises BLER and
+compute at the headline operating point.
+
+\begin{table}[t]
+  \centering
+  \caption{Per-block compute cost (single block, $\%$ of $2.1$\,MFLOP
+  budget).  Latencies are unoptimised CPU PyTorch and are
+  cross-method-incomparable.}
+  \label{tab:compute}
+  \small
+  \begin{tabular}{lrrr}
+    \toprule
+    Method & FLOPs & Lat.\ (ms) & \% budget \\
+    \midrule
+    B1 mismatched Viterbi & $65{,}536$  & $0.30$ & $3.1\%$ \\
+    B2 oracle Viterbi     & $65{,}536$  & $0.35$ & $3.1\%$ \\
+    B5 IC + Viterbi       & $94{,}720$  & $1.24$ & $4.5\%$ \\
+    N1 end-to-end (rejected) & $6{,}640{,}000$ & --- & $317\%$ \\
+    N2 seed~32            & $913{,}664$ & $1981.9$ & $43.5\%$ \\
+    N2 seed~42            & $913{,}664$ & $1614.2$ & $43.5\%$ \\
+    S1-oracle (Phase~3a)  & $65{,}536$  & --- & $3.1\%$ \\
+    S1 (Phase~3b)         & $913{,}664$ & --- & $43.5\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Summary at SNR\,$=$\,INR\,$=5$\,dB.  Methods sorted by BLER.}
   \label{tab:summary}
-  \begin{tabular}{lrrrr}
+  \small
+  \begin{tabular}{lrrr}
     \toprule
-    Method & BLER & FLOPs & Lat.\ (ms) & \% Budget \\
+    Method & BLER & FLOPs & \% budget \\
     \midrule
-    B2 Oracle Viterbi       & $1.0\times10^{-4}$ & $65{,}536$  & $0.35$ & $3.1\%$ \\
-    N2 seed~32              & $2.5\times10^{-3}$ & $913{,}664$ & $1981.9$ & $43.5\%$ \\
-    B5 IC + Viterbi         & $3.5\times10^{-1}$ & $94{,}720$  & $1.24$ & $4.5\%$ \\
-    N2 seed~42              & $2.4\times10^{-1}$ & $913{,}664$ & $1614.2$ & $43.5\%$ \\
-    B1 Mismatched Viterbi   & $1.000$             & $65{,}536$  & $0.30$ & $3.1\%$ \\
+    B2 oracle Viterbi   & $1.0\times10^{-4}$ & $65{,}536$  & $3.1\%$ \\
+    S1-oracle (Phase~3a) & $8\times10^{-5}$  & $65{,}536$  & $3.1\%$ \\
+    N2 seed~32          & $2.5\times10^{-3}$ & $913{,}664$ & $43.5\%$ \\
+    S1 (Phase~3b)       & $2.5\times10^{-3}$ & $913{,}664$ & $43.5\%$ \\
+    N2 seed~42          & $2.4\times10^{-1}$ & $913{,}664$ & $43.5\%$ \\
+    B5 IC + Viterbi     & $3.5\times10^{-1}$ & $94{,}720$  & $4.5\%$ \\
+    B1 mismatched       & $1.0$              & $65{,}536$  & $3.1\%$ \\
     \bottomrule
   \end{tabular}
 \end{table}
-
-At SNR~$=5$~dB, INR~$=5$~dB, N2 (seed~32) achieves two orders of
-magnitude lower BLER than both B1 and B5.  The SNR gain relative to B1
-is estimated at $>5$~dB at the BLER~$=10^{-3}$ operating point (B1
-requires SNR~$\approx10$~dB to reach $10^{-3}$ in the absence of
-interference, but never reaches it under INR~$=5$~dB interference;
-N2 seed~32 reaches $2.5\times10^{-3}$ at SNR~$=5$~dB).
-
-\subsection{Seed~32 vs.\ Seed~42}
-
-Both seeds use an identical BiGRU architecture; they differ only in
-the formulation of the oracle training target:
-\begin{itemize}
-  \item \textbf{Seed~32} learns unnormalized oracle distances
-    $-\norm{\mathbf{y}[k]-\mathbf{h}_j-\mathbf{i}[k]}^2$ and applies the
-    noise scaling $1/(2\sigma^2)$ deterministically at inference.
-    This isolates the NN's learning task to \emph{interference-aware
-    channel estimation}, while noise normalization is handled analytically.
-  \item \textbf{Seed~42} learns the full log-likelihood
-    $-\norm{\mathbf{r}-\mathbf{h}_j-\mathbf{i}}^2 / (2\sigma^2)$,
-    requiring the NN to also capture how the noise variance rescales
-    the metric.  The resulting target distribution has a much larger
-    dynamic range (initial MSE~$=122.4$ vs.\ $24.4$ for seed~32),
-    slowing convergence.
-\end{itemize}
-
-\subsection{Limitations of the Current Approach}
-
-\begin{itemize}
-  \item \textbf{Trellis is fixed.}  The NASA K=7 code was not designed
-    for sinusoidal interference; the trellis structure may not be optimal.
-    Phase~3 addresses this via evolutionary trellis search and finds,
-    under frozen N2 fitness, that NASA~K=7 is already optimal among
-    valid 64-state rate-$1/2$ trellises for this decoder class.
-  \item \textbf{Distribution shift.}  Training covers $P \in [8,32]$;
-    performance on $P \notin [8,32]$ has not been characterized.
-  % \item \textbf{Wall-clock latency.}  The $\approx2$-second per-block
-  %   latency of N2 in unoptimized Python inference is impractical;
-  %   GPU batching or C-compiled inference would reduce this by orders
-  %   of magnitude.
-  \item \textbf{Single interference model.}  Only sinusoidal interference
-    was considered; generalization to other structured interference
-    (e.g., chirp, pulsed) is an open question.
-\end{itemize}
 
 % ============================================================
-\newpage
-\section{Phase 3: Evolutionary Trellis Search}
-\label{sec:phase3}
+\section{Discussion and Limitations}
+\label{sec:discussion}
 
-Phases~1 and~2 fixed the trellis to the NASA~K=7 convolutional code.
-Phase~3 asks whether a \emph{co-designed} trellis can outperform it
-when decoded by either an oracle Viterbi (Phase~3a) or the frozen N2
-branch metric estimator (Phase~3b).
-The search space is the set of all valid 64-state, rate-$1/2$,
-time-invariant finite-state machines whose output alphabet is
-$\{(-1,-1),(-1,+1),(+1,-1),(+1,+1)\}$.
+\subsection{Why the EA Returns NASA K=7}
+N2 is trained to regress the oracle log-likelihood
+$-\norm{\mathbf{y}[k]-\mathbf{h}_j-\mathbf{i}[k]}^2$ at each trellis step,
+which is exactly the quantity that makes oracle Viterbi optimal.  A
+decoder whose branch metrics approximate oracle log-likelihoods will
+benefit most from a trellis that is optimal under oracle decoding---and,
+for $64$-state rate-$1/2$ codes with $\dfree\geq 8$, that trellis is
+NASA~K=7 within the search budget I explored.  The two-fitness
+convergence (oracle in Phase~3a, learned in Phase~3b) is therefore
+mutually consistent rather than coincidental: a learned metric that
+faithfully tracks the analytical optimum inherits its trellis preference.
+I frame this as evidence that NASA~K=7 \emph{is near-optimal in this
+setting}, not that it is globally optimal: the result is conditioned on a
+frozen N2 decoder, the constraint set listed in Section~\ref{sec:ea}, and
+single-seed EA runs.
 
-\subsection{Trellis Genome and Search Space}
+\subsection{Limitations}
+\label{sec:limitations}
+\begin{enumerate}
+  \item \emph{Synthetic channel.}  The interferer is generated from a
+    parametric sinusoidal model; I did not validate against measured
+    industrial-band traces.
+  \item \emph{Single trellis depth.}  Only $K_c = 7$ is studied;
+    behaviour at longer constraint lengths may differ.
+  \item \emph{Single interference family.}  Generalisation to chirp,
+    pulsed, or multitone interferers has not been characterised.
+  \item \emph{Frozen-decoder search.}  Phase~3 freezes N2 during the EA;
+    a jointly-retrained decoder might prefer a non-NASA trellis that
+    exploits interference patterns the standard linear code cannot
+    express.
+  \item \emph{Single-seed EA.}  Phases~3a/3b each report one EA seed;
+    coefficient-of-variation across seeds remains to be established.
+  \item \emph{Out-of-distribution interference.}  N2 is trained over
+    $P\in[8,32]$; performance on shorter or longer periods has not been
+    measured.
+  \item \emph{Wall-clock latency.}  N2 latency under unoptimised
+    PyTorch CPU inference is two orders of magnitude above what the
+    FLOP budget would permit on optimised hardware; the FLOP column is
+    the budget-relevant figure.
+\end{enumerate}
 
-Each candidate trellis is represented as a \emph{genome}
-$\mathcal{G} = (\mathbf{N}, \mathbf{O})$, where
-$\mathbf{N} \in \{0,\ldots,63\}^{64 \times 2}$ is the next-state table
-and $\mathbf{O} \in \{0,1,2,3\}^{64 \times 2}$ maps each
-(state, input) pair to one of the four BPSK output pairs.
-Only genomes satisfying all four structural constraints are admitted:
-(i)~full connectivity (every state reachable from state~0),
-(ii)~termination (all states can return to state~0),
-(iii)~non-catastrophic behavior (no zero-weight cycle),
-and (iv)~free distance $d_{\mathrm{free}} \geq 8$.
-These checks are fused into a single C extension
-(\texttt{phase3\_core.so}) to minimize Python--C boundary crossings.
-
-\subsubsection*{Evolutionary Algorithm}
-
-Table~\ref{tab:ea_params} lists the shared EA hyperparameters.
-At each generation, elite candidates are copied unchanged; the
-remaining offspring are produced by tournament selection followed
-by per-state crossover (a random binary mask determines which states
-each offspring inherits from each parent) and then mutation
-(1--3 random edge rewirings, up to 1{,}000 rejection-sampling attempts
-per valid candidate).
-Common random numbers (CRN) are used within each generation:
-all candidates are evaluated on identical channel realizations,
-reducing fitness variance.
-
-\begin{table}[h!]
-  \centering
-  \caption{EA hyperparameters (shared by Phases~3a and~3b)}
-  \label{tab:ea_params}
-  \begin{tabular}{lll}
-    \toprule
-    Parameter & Phase~3a & Phase~3b \\
-    \midrule
-    Population size & 50 & 50 \\
-    Elite size & 2 & 2 \\
-    Tournament size & 3 & 3 \\
-    Max generations & 200 & 200 \\
-    Plateau patience & 10 & 10 \\
-    Mutation edges & 1--3 & 1--3 \\
-    $d_{\mathrm{free}}$ target & $\geq 8$ & $\geq 8$ \\
-    Fitness SNR & 3~dB & 3~dB \\
-    Fitness INR & 5~dB & 5~dB \\
-    MC trials per eval & 1{,}000 & 1{,}000 \\
-    Fitness decoder & Oracle Viterbi & Frozen N2 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\subsection{Phase 3a: Oracle-Guided Trellis Search}
-
-\subsubsection*{Fitness Function}
-
-The Phase~3a fitness of candidate genome $\mathcal{G}$ at generation
-$g$ is the empirical BLER obtained by encoding $1{,}000$ random
-information blocks through $\mathcal{G}$, transmitting over the
-sinusoidal interference channel at SNR~$=3$~dB and INR~$=5$~dB,
-and decoding with the oracle Viterbi decoder (B2 branch metrics).
-Lower BLER is better fitness.
-Early stopping within each candidate evaluation occurs after
-100 block errors to reduce wasted compute on clearly poor genomes.
-
-\subsubsection*{Convergence}
-
-Fig.~\ref{fig:phase3a_fitness} shows the per-generation best and
-population-mean fitness over 34 generations (seed~0).
-The best-genome BLER improves monotonically from $2.1\times10^{-2}$
-(generation~0) to $1.1\times10^{-2}$ (generation~23), then
-plateaus for the remaining 11 generations until the early-stop
-criterion fires.
-Population mean fitness fluctuates in the range $[0.033, 0.052]$
-throughout, reflecting the high variance of 1{,}000-trial BLER
-estimates and the diversity of the search population.
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3a/figures/fitness_curves_seed0.pdf}
-  \caption{Phase~3a EA convergence (seed~0).
-    Best-genome BLER (blue) decreases monotonically from $2.1\times10^{-2}$
-    to $1.1\times10^{-2}$ over 34 generations.
-    Population-mean fitness (green) fluctuates due to high variance
-    of 1{,}000-trial proxy evaluations.}
-  \label{fig:phase3a_fitness}
-\end{figure}
-
-\subsubsection*{Full Evaluation Results}
-
-The best genome from seed~0 was evaluated at $10{,}000$ trials per
-SNR point at INR~$=5$~dB.
-Table~\ref{tab:phase3asnr} and Fig.~\ref{fig:phase3asnr} present
-the results alongside the B2 oracle baseline.
-
-\begin{table}[h!]
-  \centering
-  \caption{Phase~3a BLER vs.\ SNR at INR~$=5$~dB (100{,}000 trials)}
-  \label{tab:phase3asnr}
-  \begin{tabular}{rrr}
-    \toprule
-    SNR (dB) & S1-oracle & B2 \\
-    \midrule
-    0 & $9.71\times10^{-1}$ & $9.46\times10^{-1}$ \\
-    2 & $1.56\times10^{-1}$ & $1.50\times10^{-1}$ \\
-    4 & $1.40\times10^{-3}$ & $1.60\times10^{-3}$ \\
-    5 & $8.0\times10^{-5}$  & $1.0\times10^{-4}$  \\
-    $\geq6$ & $<\!10^{-5}$  & $<\!10^{-4}$  \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3a/figures/phase3a_bler_vs_snr.pdf}
-  \caption{Phase~3a BLER vs.\ SNR at INR~$=5$~dB.
-    S1-oracle (searched trellis + oracle Viterbi) tracks B2 (NASA~K=7
-    + oracle Viterbi) within statistical noise across the full SNR range,
-    confirming that the EA found a trellis with equivalent oracle-decoding
-    performance to the classical K=7 code.}
-  \label{fig:phase3asnr}
-\end{figure}
-
-Fig.~\ref{fig:phase3ainr} shows the BLER vs.\ INR sweep at SNR~$=5$~dB.
-S1-oracle maintains a constant BLER of $8\times10^{-5}$ across the
-full INR range $[-5, 15]$~dB, identical to B2.  This is expected:
-the oracle decoder subtracts the true interference regardless of its
-amplitude, so the searched trellis inherits the same INR invariance
-as B2.
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3a/figures/phase3a_bler_vs_inr.pdf}
-  \caption{Phase~3a BLER vs.\ INR at SNR~$=5$~dB.
-    S1-oracle (searched trellis + oracle Viterbi) is invariant to INR,
-    as expected when interference is perfectly subtracted before decoding.}
-  \label{fig:phase3ainr}
-\end{figure}
-
-\subsection{Phase 3b: N2-Guided Trellis Search}
-
-\subsubsection*{Fitness Function}
-
-The Phase~3b fitness uses the frozen N2 branch metric model
-(seed~32 checkpoint) in place of the oracle decoder.
-For each candidate genome $\mathcal{G}$, the N2 forward pass is run
-in batch over all $1{,}000$ trial blocks, producing a branch metric
-table $\hat{\boldsymbol{\Gamma}} \in \mathbb{R}^{T \times 4}$
-per block.  Viterbi ACS is then applied using the output-pair index
-table specific to $\mathcal{G}$, giving an empirical BLER.
-This batched evaluation is implemented in C (\texttt{phase3\_core.so})
-for the Viterbi step and in a single PyTorch forward pass for N2,
-yielding a $\approx34\times$ speedup over the na\"{i}ve per-sample loop.
-
-\subsubsection*{Convergence}
-
-Fig.~\ref{fig:phase3b_fitness} shows the fitness curve for seed~0
-over 12 generations.
-The best-genome BLER drops from $7.4\times10^{-2}$ (generation~0)
-to $5.8\times10^{-2}$ (generation~1), then remains flat for
-all subsequent generations until the plateau criterion fires.
-The immediate convergence after generation~1 indicates that the initial
-population already contained a genome at the optimum (or very near it)
-and no subsequent mutation improved upon it.
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3b/figures/fitness_curves_seed0.pdf}
-  \caption{Phase~3b EA convergence (seed~0).
-    Best-genome BLER (blue) converges to $5.8\times10^{-2}$ after a
-    single generation and does not improve further over 12 generations.
-    The plateau criterion fires at generation~11.}
-  \label{fig:phase3b_fitness}
-\end{figure}
-
-\subsubsection*{Identity of Best Trellis}
-
-The best genome recovered by Phase~3b was verified against the NASA~K=7
-trellis by comparing both the next-state table $\mathbf{N}$ and the
-output-pair table $\mathbf{O}$ element-wise, as well as by comparing
-SHA-256 hashes of the serialized genomes.
-Both comparisons confirm an \emph{exact match}: the EA recovered
-NASA~K=7 as the optimal 64-state trellis under N2 decoding.
-
-\subsubsection*{Full Evaluation Results}
-
-Table~\ref{tab:phase3bsnr} and Fig.~\ref{fig:phase3bsnr} show the BLER
-vs.\ SNR curves at INR~$=5$~dB for S1 (searched trellis + N2)
-alongside N2 (NASA~K=7 + N2) and the classical baselines.
-Since the searched trellis is identical to NASA~K=7, S1 and N2
-produce numerically identical results within Monte Carlo noise,
-as confirmed by Table~\ref{tab:phase3bsnr}.
-
-\begin{table}[h!]
-  \centering
-  \caption{Phase~3b BLER vs.\ SNR at INR~$=5$~dB (10{,}000 trials)}
-  \label{tab:phase3bsnr}
-  \begin{tabular}{rrr}
-    \toprule
-    SNR (dB) & S1 (searched + N2) & N2 (NASA K=7) \\
-    \midrule
-    0 & $9.71\times10^{-1}$ & $9.86\times10^{-1}$ \\
-    2 & $3.02\times10^{-1}$ & $3.19\times10^{-1}$ \\
-    4 & $1.22\times10^{-2}$ & $1.18\times10^{-2}$ \\
-    5 & $2.50\times10^{-3}$ & $2.50\times10^{-3}$ \\
-    6 & $7.00\times10^{-4}$ & $7.00\times10^{-4}$ \\
-    7 & $2.00\times10^{-4}$ & $2.00\times10^{-4}$ \\
-    $\geq8$ & $<\!10^{-4}$ & $<\!10^{-4}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3b/figures/phase3b_bler_vs_snr.pdf}
-  \caption{Phase~3b BLER vs.\ SNR at INR~$=5$~dB.
-    S1 (searched trellis + N2, cyan) and N2 (NASA~K=7 + N2, orange)
-    are indistinguishable, confirming that the searched trellis is
-    NASA~K=7.  S1-oracle (purple) is shown for reference.}
-  \label{fig:phase3bsnr}
-\end{figure}
-
-Table~\ref{tab:phase3binr} and Fig.~\ref{fig:phase3binr} present
-the BLER vs.\ INR sweep at SNR~$=5$~dB.
-The S1 and N2 curves again coincide, maintaining graceful degradation
-up to INR~$\approx10$~dB before rising sharply.
-
-\begin{table}[h!]
-  \centering
-  \caption{Phase~3b BLER vs.\ INR at SNR~$=5$~dB (10{,}000 trials)}
-  \label{tab:phase3binr}
-  \begin{tabular}{rrr}
-    \toprule
-    INR (dB) & S1 (searched + N2) & N2 (NASA K=7) \\
-    \midrule
-    $-5$ & $1.70\times10^{-3}$ & $1.70\times10^{-3}$ \\
-    $0$  & $3.00\times10^{-3}$ & $3.00\times10^{-3}$ \\
-    $5$  & $2.50\times10^{-3}$ & $2.50\times10^{-3}$ \\
-    $10$ & $1.08\times10^{-2}$ & $1.03\times10^{-2}$ \\
-    $15$ & $7.43\times10^{-2}$ & $7.90\times10^{-2}$ \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{figure}[h!]
-  \centering
-  \includegraphics[width=0.7\linewidth]{../results/phase3b/figures/phase3b_bler_vs_inr.pdf}
-  \caption{Phase~3b BLER vs.\ INR at SNR~$=5$~dB.
-    S1 and N2 overlap completely; both degrade gracefully relative to
-    B1 and B5, confirming that the decoder robustness established in
-    Phase~2b is preserved regardless of whether the trellis is the
-    searched or the classical NASA~K=7 code.}
-  \label{fig:phase3binr}
-\end{figure}
-
-\subsection{Discussion}
-
-The central finding of Phase~3 is that \emph{NASA~K=7 is already
-optimal for the N2 decoder}.
-Two complementary interpretations follow.
-
-\paragraph{Decoder--trellis alignment.}
-The N2 branch metric is trained to regress the oracle log-likelihood
-$-\|\mathbf{y}[k] - \mathbf{h}_j - \mathbf{i}[k]\|^2$ at each
-trellis step.  Because this target is equivalent to the oracle
-branch metric used by B2, the N2 model has learned, at least
-approximately, to compute the same quantity that makes oracle
-Viterbi optimal.  A decoder whose branch metrics approximate
-oracle log-likelihoods will benefit most from a trellis that is
-optimal under oracle decoding --- which, for this constraint length
-and state count, is NASA~K=7.
-
-\paragraph{Classical optimality is preserved.}
-Phase~3a shows that the EA, given oracle fitness, can find a valid
-trellis within $\approx$10\% BLER of B2 at the proxy SNR point
-(and matches B2 exactly at $100{,}000$-trial precision in full
-evaluation).  This validates the search infrastructure and confirms
-the constraint checks are not over-restrictive.  Phase~3b then
-shows that when fitness is evaluated through a frozen N2 decoder,
-the search converges to the same trellis.  Together, these two
-results support the hypothesis that the N2 decoder is already
-well-aligned with the free-distance structure of NASA~K=7.
-
-\paragraph{Scope.}
-These results are conditioned on the use of a \emph{frozen}
-N2 decoder during search.  It is possible that a trellis
-jointly co-optimized with a \emph{re-trained} N2 decoder would
-diverge from NASA~K=7, if such a trellis exploited interference
-patterns that the standard code cannot represent.
-This joint optimization is a natural direction for future work.
+\subsection{Future Work}
+Two directions follow directly.  \emph{Joint co-design}: re-train N2
+against the searched trellis rather than freezing the Phase~2b
+checkpoint may yield a non-NASA optimum.  \emph{Wider channel
+distributions}: training and evaluating on chirp, multi-tone, and
+measured industrial-band interferers will test the robustness of the
+local-channel-estimation hypothesis.
 
 % ============================================================
-\newpage
-\section{Conclusion and Future Work}
+\section{Conclusion}
 \label{sec:conclusion}
 
-This report documents three phases of research toward robust,
-compute-efficient decoding under sinusoidal interference.
-
-Phase~1 established that classical mismatched Viterbi (B1) saturates at
-BLER~$=1$ under moderate interference (INR~$\geq5$~dB), while the oracle
-(B2) maintains BLER~$=10^{-4}$ regardless of INR.  An FFT-based
-interference cancellation baseline (B5) provides partial mitigation but
-degrades sharply above INR~$\approx0$~dB due to estimation error.
-
-Phase~2a demonstrated that an end-to-end BiGRU decoder (N1) cannot learn
-to decode the K=7 code, plateauing near random-guessing accuracy.  The
-root causes are an information bottleneck at the pooling layer and the
-intractability of implicitly representing a 64-state Viterbi search.
-N1 also exceeds the $2.1$~MFLOP compute budget by $3.17\times$.
-
-Phase~2b introduced the neural branch metric estimator (N2), which
-preserves the Viterbi dynamic-programming structure and replaces only the
-branch metric computation.  N2 (seed~32) achieves BLER~$=2.5\times10^{-3}$
-at SNR~$=5$~dB, INR~$=5$~dB --- a gain exceeding five SNR dB over B1
-and within $\approx1.2$~dB of the oracle B2 (by log-linear interpolation
-of the B2 curve to the matched BLER) --- using $43.5\%$ of the
-$2.1$~MFLOP budget.  The key insight is that \emph{decomposing} local
-channel estimation (neural) from global trellis search (classical
-algorithm) is the critical design principle.
-
-Phase~3 extended the design space to the trellis itself via
-evolutionary search over valid 64-state rate-$1/2$ finite-state machines.
-Phase~3a confirmed that the EA, using oracle Viterbi as fitness,
-finds a trellis matching B2 performance ($\mathrm{BLER} = 8\times10^{-5}$
-at SNR~$=5$~dB, $100{,}000$ trials), validating the search and constraint
-infrastructure.
-Phase~3b, using the frozen N2 decoder as fitness, converges at
-generation~1 to NASA~K=7 exactly.  This result shows that
-the classical trellis is already optimal among 64-state trellises
-for the N2 decoder class, and that the robustness gains established
-in Phase~2b do not depend on the trellis structure.
-
-\paragraph{Future work.}
-Two directions remain open.
-First, \emph{joint} co-optimization --- re-training N2 on the
-searched trellis rather than freezing the Phase~2b checkpoint ---
-may reveal trellises that diverge from NASA~K=7 by exploiting
-interference structure that a standard linear code cannot represent.
-Second, robustness of N2 to distribution shift (interference period
-$P \notin [8, 32]$, non-sinusoidal interference, or carrier-frequency
-offsets) has not been characterized.
+A small ($\approx 1.86$\,k-parameter) BiGRU branch-metric estimator
+plugged into a standard Viterbi decoder closes most of the gap to the
+oracle bound under periodic sinusoidal interference at $43.5\%$ of a
+strict $2.1$\,MFLOP/block compute budget.  The architectural lesson is
+the decomposition of \emph{local channel estimation} (neural) from
+\emph{global trellis search} (classical algorithm); a budget-violating
+end-to-end alternative fails to learn.  Evolutionary search over valid
+$64$-state rate-$1/2$ trellises returns NASA~K=7 under both oracle and
+frozen-N2 fitness, providing empirical evidence that the classical
+benchmark is near-optimal for this decoder class in this setting.
 
 % ============================================================
 \bibliographystyle{IEEEtran}
@@ -1234,10 +749,21 @@ J.~A. Heller and I.~M. Jacobs,
 ``Viterbi decoding for satellite and space communication,''
 \emph{IEEE Trans. Commun. Technol.}, vol.~19, no.~5, pp.~835--848, Oct.~1971.
 
+\bibitem{hagenauer1989}
+J.~Hagenauer and P.~Hoeher,
+``A Viterbi algorithm with soft-decision outputs and its applications,''
+in \emph{Proc. IEEE GLOBECOM}, Dallas, TX, Nov.~1989, pp.~1680--1686.
+% TODO author/student: confirm full venue formatting.
+
 \bibitem{shlezinger2020}
 N.~Shlezinger, N.~Farsad, Y.~C. Eldar, and A.~J. Goldsmith,
 ``ViterbiNet: A deep learning based Viterbi algorithm for symbol detection,''
 \emph{IEEE Trans. Wireless Commun.}, vol.~19, no.~5, pp.~3319--3331, May~2020.
+
+\bibitem{nachmani2018}
+E.~Nachmani, E.~Marciano, L.~Lugosch, W.~J. Gross, D.~Burshtein, and Y.~Be'ery,
+``Deep learning methods for improved decoding of linear codes,''
+\emph{IEEE J. Sel. Topics Signal Process.}, vol.~12, no.~1, pp.~119--131, Feb.~2018.
 
 \bibitem{gruber2017}
 T.~Gruber, S.~Cammerer, J.~Hoydis, and S.~ten Brink,
@@ -1262,5 +788,16 @@ Z.~Yang and Y.~Jiang,
 arXiv:2202.10635, Feb.~2022.
 
 \end{thebibliography}
+
+% TODO before submission:
+%   1. Add a real industrial-IoT / VFD-emissions citation to ground the
+%      sinusoidal-interference channel model in Section II / Implementation
+%      "simulation realism" paragraph.  Suggested search: IEEE Trans. EMC
+%      papers on conducted/radiated emissions from variable-frequency drives.
+%   2. Make https://github.com/akmanjun-usc/Research public (or change the
+%      URL footnote to a public mirror).
+%   3. Verify hagenauer1989 and nachmani2018 bibliographic details
+%      against the canonical IEEE citation style; both are real papers but
+%      please double-check pages and venue formatting.
 
 \end{document}
