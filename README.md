@@ -2,31 +2,6 @@
 
 **EE597 course project — Abhishek Manjunath**
 
-Simulation study of search-designed trellis codes with neural decoding for
-non-traditional channels, under a strict per-block compute budget.
-
-## Abstract
-
-Industrial-IoT and unlicensed sub-GHz wireless links share spectrum with
-narrowband emissions from variable-frequency motor drives, switching power
-converters, and PWM controllers, which appear at the receiver as periodic
-sinusoidal interferers superimposed on thermal noise. Under such non-Gaussian
-interference, the standard mismatched soft-decision Viterbi decoder for a
-rate-1/2, constraint-length-7 (NASA K=7) convolutional code saturates at
-block-error rate (BLER) = 1 for moderate interference levels. I study learned
-and search-based co-design of the trellis and decoder under a strict 2.1 MFLOP/block
-compute budget representative of edge radios. A neural branch-metric estimator
-(**N2**, ≈1.86k parameters) trained against the oracle log-likelihood, plugged
-into a standard Viterbi add-compare-select, achieves BLER = 2.5×10⁻³ at
-SNR = INR = 5 dB — within ≈1.2 dB of the oracle decoder by log-linear
-interpolation, using 43.5% of the compute budget. An end-to-end BiGRU baseline
-(N1) overruns the budget by 3.17× and fails to learn, isolating the design
-lesson that local channel estimation, not global trellis search, is the right
-neural-component scope. An evolutionary algorithm (EA) over valid 64-state
-rate-1/2 finite-state machines, run under both oracle and frozen-N2 fitness,
-converges to the NASA K=7 polynomials, providing empirical evidence that this
-classical code is near-optimal for the decoder class considered.
-
 ---
 
 ## 1. Problem setup
